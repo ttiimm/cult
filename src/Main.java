@@ -1,7 +1,13 @@
+import javax.tools.JavaCompiler;
+import javax.tools.JavaFileObject;
+import javax.tools.StandardJavaFileManager;
+import javax.tools.ToolProvider;
+import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Arrays;
 
 void main(String[] args) {
     if (args.length < 1) {
@@ -30,6 +36,21 @@ void build() {
     }
 
     System.out.println(aPackage);
+    compile();
+}
+
+private static void compile() {
+    JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+
+    try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(null, null, null)) {
+        Iterable<? extends JavaFileObject> compilationUnits = fileManager.getJavaFileObjects(Paths.get("src", "Main.java"));
+        Iterable<String> options = Arrays.asList("--enable-preview", "--source", "22", "-d", "target");
+        JavaCompiler.CompilationTask task = compiler.getTask(null, fileManager, null, options, null, compilationUnits);
+        task.call();
+    } catch (IOException e) {
+        String sourcePath = STR."\{System.getProperty("user.dir") + File.separator}src";
+        System.err.println(STR."error: no source files detected at `\{sourcePath}`");
+    }
 }
 
 Result extractProject() {
