@@ -30,27 +30,17 @@ void usage() {
 
 void build() {
     Result result = extractProject();
-    Package aPackage = result.toProject();
+    Package aPackage = result.toPackage();
     if (aPackage == null) {
         return;
     }
 
-    System.out.println(aPackage);
-    compile();
-}
-
-private static void compile() {
-    JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
-
-    try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(null, null, null)) {
-        Iterable<? extends JavaFileObject> compilationUnits = fileManager.getJavaFileObjects(Paths.get("src", "Main.java"));
-        Iterable<String> options = Arrays.asList("--enable-preview", "--source", "22", "-d", "target");
-        JavaCompiler.CompilationTask task = compiler.getTask(null, fileManager, null, options, null, compilationUnits);
-        task.call();
-    } catch (IOException e) {
-        String sourcePath = STR."\{System.getProperty("user.dir") + File.separator}src";
-        System.err.println(STR."error: no source files detected at `\{sourcePath}`");
+    result = compile(aPackage);
+    if (!result.isOk()) {
+        return;
     }
+
+    jar(aPackage);
 }
 
 Result extractProject() {
@@ -95,11 +85,44 @@ Result extractProject() {
     return new Result(null);
 }
 
+Result compile(Package aPackage) {
+    var cwd = System.getProperty("user.dir");
+    System.out.println(STR."    Compiling \{aPackage.name} v\{aPackage.semver()} (\{cwd})");
+    var compiler = ToolProvider.getSystemJavaCompiler();
+
+    try (var fileManager = compiler.getStandardFileManager(null, null, null)) {
+        var compilationUnits = fileManager.getJavaFileObjects(Paths.get("src", "Main.java"));
+        var options = Arrays.asList("--enable-preview", "--source", "22", "-d", "target/classes");
+        var task = compiler.getTask(null, fileManager, null, options, null, compilationUnits);
+        task.call();
+    } catch (IOException e) {
+        var sourcePath = STR."\{cwd + File.separator}src";
+        System.err.println(STR."error: no source files detected at `\{sourcePath}`");
+        return new Result(null);
+    }
+
+    return new Result(new Ok());
+}
+
+void jar(Package aPackage) {
+}
+
 record Result(Record record) {
-    Package toProject() {
+    Package toPackage() {
         return (Package) record;
     }
 
+    boolean isOk() {
+        return record instanceof Ok;
+    }
 }
 
-record Package(String name, Integer major, Integer minor, Integer patch) {}
+record Ok() {}
+
+record Package(String name, Integer major, Integer minor, Integer patch) {
+
+    String semver() {
+        return STR."\{major}.\{minor}.\{patch}";
+    }
+}
+
