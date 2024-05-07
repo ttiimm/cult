@@ -1,13 +1,14 @@
-import javax.tools.JavaCompiler;
-import javax.tools.JavaFileObject;
-import javax.tools.StandardJavaFileManager;
 import javax.tools.ToolProvider;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
+import java.util.jar.JarEntry;
+import java.util.jar.JarOutputStream;
+import java.util.jar.Manifest;
 
 void main(String[] args) {
     if (args.length < 1) {
@@ -104,7 +105,53 @@ Result compile(Package aPackage) {
     return new Result(new Ok());
 }
 
-void jar(Package aPackage) {
+Result jar(Package aPackage) {
+    var manifest = new Manifest();
+    var attributes = manifest.getMainAttributes();
+    attributes.putValue("Manifest-Version", "1.0");
+    attributes.putValue("Created-By", "Cult");
+    attributes.putValue("Main-Class", "Main");
+    attributes.putValue("Name", aPackage.name);
+
+    var jarDir = Paths.get("target", "jar");
+    try {
+        Files.createDirectories(jarDir);
+    } catch (IOException e) {
+        System.err.println(STR."error: could not create directory `\{jarDir}`");
+        return new Result(null);
+    }
+
+    var jarPath = jarDir.resolve(STR."\{aPackage.name}-\{aPackage.semver()}.jar");
+    try (
+            var fos = new FileOutputStream(jarPath.toString());
+            var jar = new JarOutputStream(fos, manifest)
+    ) {
+        var path = Paths.get("target", "classes");
+        return addEntriesToJar(path, jar);
+    } catch (IOException e) {
+        System.err.println(STR."error: failed creating jar file. \{e.getMessage()}");
+        return new Result(null);
+    }
+}
+
+Result addEntriesToJar(Path path, JarOutputStream jar) {
+    try (var paths = Files.walk(path)) {
+            paths.filter(Files::isRegularFile)
+                 .forEach(file -> {
+                    try {
+                        var entry = new JarEntry(path.relativize(file).toString());
+                        jar.putNextEntry(entry);
+                        jar.write(Files.readAllBytes(file));
+                        jar.closeEntry();
+                    } catch (IOException e) {
+                        System.err.println(STR."error: could not add entry `\{file}` to jar");
+                    }
+                });
+    } catch (IOException e) {
+        System.err.println(STR."error: could not walk directory `\{path}`");
+        return new Result(null);
+    }
+    return new Result(new Ok());
 }
 
 record Result(Record record) {
@@ -120,9 +167,7 @@ record Result(Record record) {
 record Ok() {}
 
 record Package(String name, Integer major, Integer minor, Integer patch) {
-
     String semver() {
         return STR."\{major}.\{minor}.\{patch}";
     }
 }
-
