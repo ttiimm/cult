@@ -53,6 +53,7 @@ private void clean() {
 }
 
 void build() {
+    long start = System.currentTimeMillis();
     Result result = extractProject();
     Package aPackage = result.toPackage();
     if (aPackage == null) {
@@ -64,7 +65,14 @@ void build() {
         return;
     }
 
-    jar(aPackage);
+    result = jar(aPackage);
+    long end = System.currentTimeMillis();
+    float duration = (float) (end - start) / 1000;
+    if (result.isOk()) {
+        System.out.printf("    Finished build in %.2fs%n", duration);
+    } else {
+        System.out.printf("    Finished build with errors in %.2fs%n", duration);
+    }
 }
 
 Result extractProject() {
