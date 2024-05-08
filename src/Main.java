@@ -6,9 +6,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
+import java.util.stream.Stream;
 
 void main(String[] args) {
     if (args.length < 1) {
@@ -17,6 +19,9 @@ void main(String[] args) {
     }
 
     switch (args[0]) {
+        case "clean":
+            clean();
+            break;
         case "build":
             build();
             break;
@@ -25,8 +30,26 @@ void main(String[] args) {
     }
 }
 
+
 void usage() {
     System.out.println("A simple Java package manager");
+}
+
+private void clean() {
+    try (var toClean = Files.walk(Paths.get("target"))) {
+        toClean.sorted(Comparator.reverseOrder())
+                .forEach(file -> {
+                    try {
+                        Files.delete(file);
+                    } catch (IOException e) {
+                        System.err.println(STR."error: could not delete file `\{file}`");
+                        System.err.println(e.getMessage());
+                    }
+            });
+    } catch (IOException e) {
+        System.err.println(STR."error: could not walk directory `target`");
+        System.err.println(e.getMessage());
+    }
 }
 
 void build() {
