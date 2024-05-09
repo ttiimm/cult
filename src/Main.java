@@ -10,7 +10,6 @@ import java.util.Comparator;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
-import java.util.stream.Stream;
 
 void main(String[] args) {
     if (args.length < 1) {
@@ -19,6 +18,13 @@ void main(String[] args) {
     }
 
     switch (args[0]) {
+        case "new":
+            if (args.length < 2) {
+                System.err.println("error: missing <PATH> argument");
+                System.exit(1);
+            }
+            newPackage(args[1]);
+            break;
         case "clean":
             clean();
             break;
@@ -30,12 +36,11 @@ void main(String[] args) {
     }
 }
 
-
 void usage() {
     System.out.println("A simple Java package manager");
 }
 
-private void clean() {
+void clean() {
     try (var toClean = Files.walk(Paths.get("target"))) {
         toClean.sorted(Comparator.reverseOrder())
                 .forEach(file -> {
@@ -48,6 +53,31 @@ private void clean() {
             });
     } catch (IOException e) {
         System.err.println(STR."error: could not walk directory `target`");
+        System.err.println(e.getMessage());
+    }
+}
+
+// XXX: hrmmm calling package for now, but that's kind of confusing in a Java context
+void newPackage(String path) {
+    try {
+        Path rootPath = Paths.get(path);
+        Path packageName = rootPath.getFileName();
+        System.out.println(STR."    Creating `\{packageName }` project");
+        Files.createDirectories(Paths.get(path, "src"));
+        Files.writeString(Paths.get(path, "Cult.toml"), STR."""
+            [package]
+            name = "\{packageName}"
+            version = "0.1.0"
+            """);
+        Files.writeString(Paths.get(path, "src", "Main.java"), """
+            public class Main {
+                public static void main(String[] args) {
+                    System.out.println("Hello, World!");
+                }
+            }
+            """);
+    } catch (IOException e) {
+        System.err.println(STR."error: could not create directory under `\{path}`");
         System.err.println(e.getMessage());
     }
 }
