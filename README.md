@@ -52,7 +52,7 @@ void main() {
 }
 ```
 
-You can compile the project using, which results in a runnable jar.
+You can compile the project using the `build` command, which results in a runnable jar.
 
 ```bash
 $ java --enable-preview -jar ../cult-0.1.0.jar build
