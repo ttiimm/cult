@@ -1,7 +1,5 @@
 import javax.tools.ToolProvider;
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
+import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -30,6 +28,12 @@ void main(String[] args) {
             break;
         case "build":
             build();
+            break;
+        case "run":
+            Result result = build();
+            if (result.isOk()) {
+                run();
+            }
             break;
         default:
             usage();
@@ -70,29 +74,50 @@ void newPackage(String path) {
             version = "0.1.0"
             """);
         Files.writeString(Paths.get(path, "src", "Main.java"), """
-            public class Main {
-                public static void main(String[] args) {
-                    System.out.println("Hello, World!");
-                }
-            }
-            """);
+        void main() {
+            System.out.println("Hail, World!");
+        }
+        """);
     } catch (IOException e) {
         System.err.println(STR."error: could not create directory under `\{path}`");
         System.err.println(e.getMessage());
     }
 }
 
-void build() {
+void run() {
+    // XXX: assumes the build was run successfully and if that's the case, then know that a "package" exists
+    Package aPackage = extractProject().toPackage();
+    var jarPath = Paths.get("target", "jar", aPackage.getMainJarName());
+    try {
+        System.out.println(STR."        Running `\{jarPath}`");
+        var process = new ProcessBuilder("java", "--enable-preview", "-jar", jarPath.toString()).start();
+        var stdout = new ProcessPrinter(process.inputReader(), System.out);
+        var stderr = new ProcessPrinter(process.errorReader(), System.err);
+        Thread outThread = new Thread(stdout);
+        Thread errThread = new Thread(stderr);
+        outThread.start();
+        errThread.start();
+        process.waitFor();
+        outThread.join();
+        errThread.join();
+    } catch (IOException e) {
+        System.err.println(STR."error: could not find jar file at `\{jarPath}`");
+    } catch (InterruptedException e) {
+        System.err.println(STR."error: process was interrupted");
+    }
+}
+
+Result build() {
     long start = System.currentTimeMillis();
     Result result = extractProject();
     Package aPackage = result.toPackage();
     if (aPackage == null) {
-        return;
+        return result;
     }
 
     result = compile(aPackage);
     if (!result.isOk()) {
-        return;
+        return result;
     }
 
     result = jar(aPackage);
@@ -103,6 +128,7 @@ void build() {
     } else {
         System.out.printf("    Finished build with errors in %.2fs%n", duration);
     }
+    return result;
 }
 
 Result extractProject() {
@@ -182,7 +208,7 @@ Result jar(Package aPackage) {
         return new Result(null);
     }
 
-    var jarPath = jarDir.resolve(STR."\{aPackage.name}-\{aPackage.semver()}.jar");
+    var jarPath = jarDir.resolve(aPackage.getMainJarName());
     try (
             var fos = new FileOutputStream(jarPath.toString());
             var jar = new JarOutputStream(fos, manifest)
@@ -230,5 +256,32 @@ record Ok() {}
 record Package(String name, Integer major, Integer minor, Integer patch) {
     String semver() {
         return STR."\{major}.\{minor}.\{patch}";
+    }
+
+    public String getMainJarName() {
+        return STR."\{name}-\{semver()}.jar";
+    }
+}
+
+class ProcessPrinter implements Runnable {
+
+    private final BufferedReader reader;
+    private final PrintStream out;
+
+    ProcessPrinter(BufferedReader reader, PrintStream out) {
+        this.reader = reader;
+        this.out = out;
+    }
+
+    @Override
+    public void run() {
+        try (reader) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                out.println(line);
+            }
+        } catch (IOException e) {
+            System.err.println("error: could not read process output");
+        }
     }
 }
