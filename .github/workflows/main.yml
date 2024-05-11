@@ -2,7 +2,7 @@ name: Build Cult & Release
 on: 
   push:
     tags: 
-      - '*.*.*'
+      - 'v*.*.*'
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -17,7 +17,7 @@ jobs:
       run: javac --enable-preview --source 22 -d target src/Main.java && java --enable-preview -cp target Main build
     - name: Get the version
       id: get_version
-      run: echo ::set-output name=VERSION::${GITHUB_REF#refs/tags/}
+      run: echo ::set-output name=VERSION::${GITHUB_REF#refs/tags/v}
     - uses: softprops/action-gh-release@v2
       with:
         draft: true
