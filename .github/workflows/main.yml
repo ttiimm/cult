@@ -15,8 +15,11 @@ jobs:
         java-version: '22'
     - name: Compile
       run: javac --enable-preview --source 22 -d target src/Main.java && java --enable-preview -cp target Main build
+    - name: Get the version
+      id: get_version
+      run: echo ::set-output name=VERSION::${GITHUB_REF#refs/tags/}
     - uses: softprops/action-gh-release@v2
       with:
         draft: true
         files: |
-          ./target/jar/cult-${{ github.ref }}.jar
+          ./target/jar/cult-${{ steps.get_version.outputs.VERSION }}.jar
