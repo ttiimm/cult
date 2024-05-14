@@ -5,6 +5,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
@@ -115,6 +117,12 @@ Result build() {
         return result;
     }
 
+    result = resolve();
+    var dependencies = result.toDependencies();
+    if (dependencies == null) {
+        return result;
+    }
+
     result = compile(aPackage);
     if (!result.isOk()) {
         return result;
@@ -152,25 +160,43 @@ Result extractProject() {
         }
 
         if (name != null && version != null) {
-            String[] semantic = version.split("\\.");
-            Integer major, minor, patch;
-            major = minor = patch = 0;
-            switch (semantic.length) {
-                case 3:
-                    patch = Integer.parseInt(semantic[2]);
-                case 2:
-                    minor = Integer.parseInt(semantic[1]);
-                case 1:
-                    major = Integer.parseInt(semantic[0]);
-            }
-            return new Result(new Package(name, major, minor, patch));
+            Version packageVersion = new Version(version);
+            return new Result(new Package(name, packageVersion));
         }
     } catch (IOException e) {
         String pwd = System.getProperty("user.dir");
         System.err.println(STR."error: could not find `Cult.toml` in `\{pwd}`");
+        return new Result(null);
     }
-
     return new Result(null);
+}
+
+Result resolve() {
+    var toml = Paths.get("Cult.toml");
+    var inDependencies = false;
+    var dependencies = new Dependencies();
+    try {
+        for (String line : Files.readAllLines(toml)) {
+            if (line.contains("[dependencies]")) {
+                inDependencies = true;
+            } else if (line.contains("[") && line.contains("]")) {
+                inDependencies = false;
+            }
+
+            if (inDependencies && line.split("=").length >= 2) {
+                var name = line.split("=")[0].trim();
+                var version = line.split("=")[1].replace("\"", "").trim();
+                dependencies.add(name, new Version(version));
+            }
+        }
+
+        System.out.println(STR."Dependencies were \{dependencies.get()}");
+        return new Result(dependencies);
+    } catch (IOException e) {
+        var pwd = System.getProperty("user.dir");
+        System.err.println(STR."error: could not find `Cult.toml` in `\{pwd}`");
+        return new Result(null);
+    }
 }
 
 Result compile(Package aPackage) {
@@ -249,17 +275,56 @@ record Result(Record record) {
     boolean isOk() {
         return record instanceof Ok;
     }
+
+    public Dependencies toDependencies() {
+        return (Dependencies) record;
+    }
 }
 
 record Ok() {}
 
-record Package(String name, Integer major, Integer minor, Integer patch) {
+record Package(String name, Version version) {
     String semver() {
-        return STR."\{major}.\{minor}.\{patch}";
+        return version.semver();
     }
 
     public String getMainJarName() {
         return STR."\{name}-\{semver()}.jar";
+    }
+}
+
+record Version(Integer major, Integer minor, Integer patch) {
+
+    Version(String version)  {
+        String[] semantic = version.split("\\.");
+        Integer major, minor, patch;
+        major = minor = patch = 0;
+        switch (semantic.length) {
+            case 3:
+                patch = Integer.parseInt(semantic[2]);
+            case 2:
+                minor = Integer.parseInt(semantic[1]);
+            case 1:
+                major = Integer.parseInt(semantic[0]);
+        }
+        this(major, minor, patch);
+    }
+
+    String semver() {
+        return STR."\{major}.\{minor}.\{patch}";
+    }
+}
+
+record Dependencies() {
+
+    private static Map<String, Version> dependencies = new HashMap<>();
+
+    void add(String name, Version version) {
+        dependencies.put(name, version);
+    }
+
+    public Map get() {
+        return dependencies;
     }
 }
 

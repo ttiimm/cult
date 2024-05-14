@@ -95,13 +95,11 @@ The only pre-requisite is to install a version JDK 22.
 Compile the Main class and use it to build an initial jar.
 
 ```bash
-$ javac --enable-preview --source 22 -d target src/Main.java && java --enable-preview -cp target Main build
-Note: src/Main.java uses preview features of Java SE 22.
-Note: Recompile with -Xlint:preview for details.
+$ java --enable-preview --source 22 src/Main.java build
     Compiling cult v0.1.0 (/Users/tim/Projects/cult)
 Note: src/Main.java uses preview features of Java SE 22.
 Note: Recompile with -Xlint:preview for details.
-    Finished build in 0.33s
+    Finished build in 0.11s
 ```
 
 Afterwards, use the jar to continue development.
