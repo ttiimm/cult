@@ -1,12 +1,18 @@
+import org.apache.ivy.Ivy;
+import org.apache.ivy.core.module.id.ModuleRevisionId;
+import org.apache.ivy.core.report.DownloadStatus;
+import org.apache.ivy.core.report.ResolveReport;
+import org.apache.ivy.core.resolve.ResolveOptions;
+import org.apache.ivy.util.AbstractMessageLogger;
+import org.apache.ivy.util.Message;
+
 import javax.tools.ToolProvider;
 import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.Arrays;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.Map;
+import java.text.ParseException;
+import java.util.*;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
@@ -117,13 +123,19 @@ Result build() {
         return result;
     }
 
-    result = resolve();
+    result = extractDependencies();
     var dependencies = result.toDependencies();
     if (dependencies == null) {
         return result;
     }
 
-    result = compile(aPackage);
+    result = fetch(dependencies);
+    var jars = result.toJars();
+    if (jars == null) {
+        return result;
+    }
+
+    result = compile(aPackage, jars);
     if (!result.isOk()) {
         return result;
     }
@@ -171,7 +183,7 @@ Result extractProject() {
     return new Result(null);
 }
 
-Result resolve() {
+Result extractDependencies() {
     var toml = Paths.get("Cult.toml");
     var inDependencies = false;
     var dependencies = new Dependencies();
@@ -184,13 +196,18 @@ Result resolve() {
             }
 
             if (inDependencies && line.split("=").length >= 2) {
-                var name = line.split("=")[0].trim();
+                var identifier = line.split("=")[0].replace("\"", "").trim();
+
+                if (identifier.split("_").length != 2) {
+                    System.err.println(STR."error: expecting single '_' in dependency key, but it was: \{identifier}");
+                    return new Result(null);
+                }
+
                 var version = line.split("=")[1].replace("\"", "").trim();
-                dependencies.add(name, new Version(version));
+                dependencies.add(new ModuleId(identifier), new Version(version));
             }
         }
 
-        System.out.println(STR."Dependencies were \{dependencies.get()}");
         return new Result(dependencies);
     } catch (IOException e) {
         var pwd = System.getProperty("user.dir");
@@ -199,14 +216,50 @@ Result resolve() {
     }
 }
 
-Result compile(Package aPackage) {
+Result fetch(Dependencies dependencies) {
+    Ivy ivy = Ivy.newInstance();
+    try {
+        ivy.configureDefault();
+        Message.setDefaultLogger(new QuietLogger());
+    } catch (ParseException | IOException e) {
+        System.err.println(STR."error: could not configure Ivy");
+        System.err.println(e.getMessage());
+        return new Result(null);
+    }
+
+    var paths = new ArrayList<String>();
+    for (var entry : dependencies.get().entrySet()) {
+        try {
+            ModuleId module = entry.getKey();
+            Version version = entry.getValue();
+            ModuleRevisionId mrid = ModuleRevisionId.newInstance(module.organization, module.name, version.semver());
+            ResolveOptions resolveOptions = new ResolveOptions().setConfs(new String[]{"default"});
+            ResolveReport resolveReport = ivy.resolve(mrid, resolveOptions, true);
+            for (var report : resolveReport.getAllArtifactsReports()) {
+                if (report.getDownloadStatus() != DownloadStatus.NO) {
+                    System.out.println(STR."    \{report}");
+                }
+                // XXX: maybe need to filter based on the extension or some such?
+                paths.add(report.getLocalFile().getAbsolutePath());
+            }
+        } catch (ParseException | IOException e) {
+            System.err.println(STR."error: failed downloading dependency `\{entry}`");
+            System.err.println(e.getMessage());
+            return new Result(null);
+        }
+    }
+    return new Result(new Jars(paths));
+}
+
+Result compile(Package aPackage, Jars jars) {
     var cwd = System.getProperty("user.dir");
     System.out.println(STR."    Compiling \{aPackage.name} v\{aPackage.semver()} (\{cwd})");
     var compiler = ToolProvider.getSystemJavaCompiler();
 
     try (var fileManager = compiler.getStandardFileManager(null, null, null)) {
         var compilationUnits = fileManager.getJavaFileObjects(Paths.get("src", "Main.java"));
-        var options = Arrays.asList("--enable-preview", "--source", "22", "-d", "target/classes");
+        String classpath = String.join(":", jars.paths);
+        var options = Arrays.asList("--enable-preview", "--source", "22", "-cp", classpath, "-d", "target/classes");
         var task = compiler.getTask(null, fileManager, null, options, null, compilationUnits);
         task.call();
     } catch (IOException e) {
@@ -279,6 +332,10 @@ record Result(Record record) {
     public Dependencies toDependencies() {
         return (Dependencies) record;
     }
+
+    public Jars toJars() {
+        return (Jars) record;
+    }
 }
 
 record Ok() {}
@@ -315,17 +372,29 @@ record Version(Integer major, Integer minor, Integer patch) {
     }
 }
 
+record ModuleId(String organization, String name) {
+
+    ModuleId(String identifier) {
+        String[] idParts = identifier.split("_");
+        this(idParts[0], idParts[1]);
+    }
+}
+
 record Dependencies() {
 
-    private static Map<String, Version> dependencies = new HashMap<>();
+    private static Map<ModuleId, Version> dependencies = new HashMap<>();
 
-    void add(String name, Version version) {
-        dependencies.put(name, version);
+    void add(ModuleId modId, Version version) {
+        dependencies.put(modId, version);
     }
 
-    public Map get() {
-        return dependencies;
+    public Map<ModuleId, Version> get() {
+        return new HashMap<>(dependencies);
     }
+}
+
+record Jars(List<String> paths) {
+
 }
 
 class ProcessPrinter implements Runnable {
@@ -347,6 +416,34 @@ class ProcessPrinter implements Runnable {
             }
         } catch (IOException e) {
             System.err.println("error: could not read process output");
+        }
+    }
+}
+
+// Custom Logger for Ivy, maybe there's an easier way to configure this behavior?
+class QuietLogger extends AbstractMessageLogger {
+
+    @Override
+    public void doProgress() {
+        // Do nothing
+    }
+
+    @Override
+    public void doEndProgress(String msg) {
+        // Do nothing
+    }
+
+    @Override
+    public void rawlog(String msg, int level) {
+        if (level <= Message.MSG_ERR) {
+            System.err.println(msg);
+        }
+    }
+
+    @Override
+    public void log(String msg, int level) {
+        if (level <= Message.MSG_ERR) {
+            System.err.println(msg);
         }
     }
 }

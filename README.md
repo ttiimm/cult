@@ -86,13 +86,13 @@ ls: target: No such file or directory
 
 That's the extent of the functionality for the `0.1` release. 
 
-# Developing cult
+# Developing Cult
 
 Cult uses Cult to structure and build itself. Here are the steps to bootstrap the initial version of the jar.
 
-The only pre-requisite is to install a version JDK 22.
+The only pre-requisite to install is a version JDK 22.
 
-Compile the Main class and use it to build an initial jar.
+Cult can be run using, which will build the jar.
 
 ```bash
 $ java --enable-preview --source 22 src/Main.java build
