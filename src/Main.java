@@ -99,6 +99,7 @@ void run() {
     try {
         System.out.println(STR."        Running `\{jarPath}`");
         var process = new ProcessBuilder("java", "--enable-preview", "-jar", jarPath.toString()).start();
+        // XXX: should try out the Project Loom stuff here
         var stdout = new ProcessPrinter(process.inputReader(), System.out);
         var stderr = new ProcessPrinter(process.errorReader(), System.err);
         Thread outThread = new Thread(stdout);
@@ -140,7 +141,7 @@ Result build() {
         return result;
     }
 
-    result = jar(aPackage);
+    result = jar(aPackage, jars);
     long end = System.currentTimeMillis();
     float duration = (float) (end - start) / 1000;
     if (result.isOk()) {
@@ -227,7 +228,12 @@ Result fetch(Dependencies dependencies) {
         return new Result(null);
     }
 
-    var paths = new ArrayList<String>();
+    var dirResult = createDir(Paths.get("target","lib"));
+    if (!dirResult.isOk()) {
+        return dirResult;
+    }
+
+    List<Path> paths = new ArrayList<>();
     for (var entry : dependencies.get().entrySet()) {
         try {
             ModuleId module = entry.getKey();
@@ -240,10 +246,15 @@ Result fetch(Dependencies dependencies) {
                     System.out.println(STR."    \{report}");
                 }
                 // XXX: maybe need to filter based on the extension or some such?
-                paths.add(report.getLocalFile().getAbsolutePath());
+                var source = report.getLocalFile().getAbsoluteFile().toPath();
+                var target = Paths.get("target", "lib", source.getFileName().toString());
+                if (!target.toFile().exists()) {
+                    Files.copy(source, target);
+                }
+                paths.add(target);
             }
         } catch (ParseException | IOException e) {
-            System.err.println(STR."error: failed downloading dependency `\{entry}`");
+            System.err.println(STR."error: failed fetching dependency `\{entry}`");
             System.err.println(e.getMessage());
             return new Result(null);
         }
@@ -258,7 +269,7 @@ Result compile(Package aPackage, Jars jars) {
 
     try (var fileManager = compiler.getStandardFileManager(null, null, null)) {
         var compilationUnits = fileManager.getJavaFileObjects(Paths.get("src", "Main.java"));
-        String classpath = String.join(":", jars.paths);
+        String classpath = String.join(":", jars.paths.stream().map(Path::toString).toList());
         var options = Arrays.asList("--enable-preview", "--source", "22", "-cp", classpath, "-d", "target/classes");
         var task = compiler.getTask(null, fileManager, null, options, null, compilationUnits);
         task.call();
@@ -271,21 +282,23 @@ Result compile(Package aPackage, Jars jars) {
     return new Result(new Ok());
 }
 
-Result jar(Package aPackage) {
+Result jar(Package aPackage, Jars jars) {
     var manifest = new Manifest();
     var attributes = manifest.getMainAttributes();
     attributes.putValue("Manifest-Version", "1.0");
-    attributes.putValue("Created-By", "Cult");
+    attributes.putValue("Created-By", "Cult 0.1.0");
     attributes.putValue("Main-Class", "Main");
     attributes.putValue("Name", aPackage.name);
 
     var jarDir = Paths.get("target", "jar");
-    try {
-        Files.createDirectories(jarDir);
-    } catch (IOException e) {
-        System.err.println(STR."error: could not create directory `\{jarDir}`");
-        return new Result(null);
+    Result dirResult = createDir(jarDir);
+    if (!dirResult.isOk()) {
+        return dirResult;
     }
+
+    var paths = jars.paths();
+    var relativized = paths.stream().map(jarDir::relativize).map(Path::toString).toList();
+    attributes.putValue("Class-Path", String.join(" ", relativized));
 
     var jarPath = jarDir.resolve(aPackage.getMainJarName());
     try (
@@ -298,6 +311,16 @@ Result jar(Package aPackage) {
         System.err.println(STR."error: failed creating jar file. \{e.getMessage()}");
         return new Result(null);
     }
+}
+
+private static Result createDir(Path targetDir) {
+    try {
+        Files.createDirectories(targetDir);
+    } catch (IOException e) {
+        System.err.println(STR."error: could not create directory `\{targetDir}`");
+        return new Result(null);
+    }
+    return new Result(new Ok());
 }
 
 Result addEntriesToJar(Path path, JarOutputStream jar) {
@@ -393,7 +416,7 @@ record Dependencies() {
     }
 }
 
-record Jars(List<String> paths) {
+record Jars(List<Path> paths) {
 
 }
 
