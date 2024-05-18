@@ -13,8 +13,10 @@ jobs:
       with:
         distribution: 'temurin'
         java-version: '22'
+    - name: Dependencies
+      run: mkdir lib && wget -U "Cult-Baby" https://repo1.maven.org/maven2/org/apache/ivy/ivy/2.5.2/ivy-2.5.2.jar -O lib/ivy-2.5.2.jar
     - name: Compile
-      run: javac --enable-preview --source 22 -d target src/Main.java && java --enable-preview -cp target Main build
+      run: java -cp lib/ivy-2.5.2.jar --enable-preview --source 22 src/Main.java build --fat
     - name: Get the version
       id: get_version
       run: echo ::set-output name=VERSION::${GITHUB_REF#refs/tags/v}
