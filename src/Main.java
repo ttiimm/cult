@@ -1,15 +1,10 @@
-import org.apache.ivy.Ivy;
-import org.apache.ivy.core.module.id.ModuleRevisionId;
-import org.apache.ivy.core.report.DownloadStatus;
-import org.apache.ivy.core.report.ResolveReport;
-import org.apache.ivy.core.resolve.ResolveOptions;
-import org.apache.ivy.util.AbstractMessageLogger;
-import org.apache.ivy.util.Message;
-
 import java.io.*;
+import java.net.URI;
+import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.text.ParseException;
 import java.util.*;
 import java.util.jar.JarEntry;
@@ -222,78 +217,34 @@ Result extractDependencies() {
 }
 
 Result fetch(Dependencies dependencies) {
-//    // XXX: need to programmatically set the Ivy Settings since trying to load resources fails during native execution
-//    var ivySettings = new IvySettings();
-//    ivySettings.setDefaultIvyUserDir(new File(STR."\{System.getProperty("user.home")}/.ivy2"));
-//    ivySettings.setDefaultCache(new File(STR."\{System.getProperty("user.home")}/.ivy2/cache"));
-//
-//    // Add a resolver for Maven Central
-//    IBiblioResolver resolver = new IBiblioResolver();
-//    resolver.setM2compatible(true);
-//    resolver.setName("central");
-//    resolver.setRoot("https://repo1.maven.org/maven2/");
-//    ivySettings.addResolver(resolver);
-//    ivySettings.setDefaultResolver(resolver.getName());
-//
-//    // Add a public resolver
-//    URLResolver publicResolver = new URLResolver();
-//    publicResolver.setName("public");
-//    publicResolver.addIvyPattern("http://repo1.maven.org/maven2/[organisation]/[module]/[revision]/[artifact]-[revision].[ext]");
-//    publicResolver.addArtifactPattern("http://repo1.maven.org/maven2/[organisation]/[module]/[revision]/[artifact]-[revision].[ext]");
-//    ivySettings.addResolver(publicResolver);
-//
-//    // Add a main resolver
-//    URLResolver mainResolver = new URLResolver();
-//    mainResolver.setName("main");
-//    mainResolver.addIvyPattern("http://repo1.maven.org/maven2/[organisation]/[module]/[revision]/[artifact]-[revision].[ext]");
-//    mainResolver.addArtifactPattern("http://repo1.maven.org/maven2/[organisation]/[module]/[revision]/[artifact]-[revision].[ext]");
-//    ivySettings.addResolver(mainResolver);
-//
-//    Ivy ivy = Ivy.newInstance(ivySettings);
-//    Message.setDefaultLogger(new QuietLogger());
-
-    Ivy ivy = Ivy.newInstance();
-    try {
-        ivy.configureDefault();
-        Message.setDefaultLogger(new QuietLogger());
-    } catch (ParseException | IOException e) {
-        System.err.println("error: could not configure Ivy");
-        System.err.println(e.getMessage());
-        return new Result(null);
-    }
-
-    var dirResult = createDir(Paths.get("target","lib"));
-    if (!dirResult.isOk()) {
-        return dirResult;
-    }
-
     var paths = new ArrayList<LibInfo>();
-    for (var entry : dependencies.get().entrySet()) {
-        try {
-            ModuleId module = entry.getKey();
-            Version version = entry.getValue();
-            ModuleRevisionId mrid = ModuleRevisionId.newInstance(module.organization, module.name, version.semver());
-            ResolveOptions resolveOptions = new ResolveOptions().setConfs(new String[]{"default"});
-            ResolveReport resolveReport = ivy.resolve(mrid, resolveOptions, true);
-            for (var report : resolveReport.getAllArtifactsReports()) {
-                if (report.getDownloadStatus() != DownloadStatus.NO) {
-                    System.out.println(STR."    \{report}");
-                }
-                // XXX: maybe need to filter based on the extension or some such?
-                var source = report.getLocalFile().getAbsoluteFile().toPath();
-                var target = Paths.get("target", "lib", source.getFileName().toString());
-                if (!target.toFile().exists()) {
-                    Files.copy(source, target);
-                    paths.add(new LibInfo(target, true));
-                } else {
-                    paths.add(new LibInfo(target, false));
-                }
+    Path libDir = Paths.get("target", "lib");
+    var result = createDir(libDir);
+    if (!result.isOk()) {
+        return result;
+    }
 
+    for (var entry : dependencies.get().entrySet()) {
+        // XXX: maybe move this stuff into ModuleId
+        var module = entry.getKey();
+        var orgPath = String.join("/", module.organization.split("\\."));
+        var version = entry.getValue();
+        var semver = version.semver();
+        var jarName = STR."\{ module.name }-\{ semver }.jar";
+
+        var libJar = libDir.resolve(jarName);
+        if (libJar.toFile().exists()) {
+            paths.add(new LibInfo(libJar, false));
+        } else {
+            String url = STR."https://repo1.maven.org/maven2/\{ orgPath }/\{ module.name }/\{ semver }/\{ jarName }";
+            try (InputStream in = URI.create(url).toURL().openStream()) {
+                Files.copy(in, libJar);
+                paths.add(new LibInfo(libJar, false));
+            } catch (IOException e) {
+                System.err.println(STR."error: could not fetch library: \{url}");
+                System.err.println(e.getMessage());
+                return new Result(null);
             }
-        } catch (ParseException | IOException e) {
-            System.err.println(STR."error: failed fetching dependency `\{entry}`");
-            System.err.println(e.getMessage());
-            return new Result(null);
         }
     }
     return new Result(new Jars(paths));
@@ -561,34 +512,6 @@ static class ProcessPrinter implements Runnable {
             }
         } catch (IOException e) {
             System.err.println("error: could not read process output");
-        }
-    }
-}
-
-// Custom Logger for Ivy, maybe there's an easier way to configure this behavior?
-static class QuietLogger extends AbstractMessageLogger {
-
-    @Override
-    public void doProgress() {
-        // Do nothing
-    }
-
-    @Override
-    public void doEndProgress(String msg) {
-        // Do nothing
-    }
-
-    @Override
-    public void rawlog(String msg, int level) {
-        if (level <= Message.MSG_ERR) {
-            System.err.println(msg);
-        }
-    }
-
-    @Override
-    public void log(String msg, int level) {
-        if (level <= Message.MSG_ERR) {
-            System.err.println(msg);
         }
     }
 }
