@@ -6,7 +6,6 @@ import org.apache.ivy.core.resolve.ResolveOptions;
 import org.apache.ivy.util.AbstractMessageLogger;
 import org.apache.ivy.util.Message;
 
-import javax.tools.ToolProvider;
 import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -14,6 +13,7 @@ import java.nio.file.Paths;
 import java.text.ParseException;
 import java.util.*;
 import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
 import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
 
@@ -35,10 +35,23 @@ void main(String[] args) {
             clean();
             break;
         case "build":
-            build();
+            var executable = Executable.JAR;
+            if (args.length >= 2) {
+                // meh -- native stuff is turning out to be harder than expected
+//                if (args[1].equals("-n") || args[1].equals("--native")) {
+//                    executable = Executable.NATIVE;
+//                } else
+                if (args[1].equals("-f") || args[1].equals("--fat")) {
+                    executable = Executable.FAT;
+                } else {
+                    System.err.println(STR."error: unknown build option `\{args[1]}`");
+                    System.exit(1);
+                }
+            }
+            build(executable);
             break;
         case "run":
-            Result result = build();
+            Result result = build(Executable.JAR);
             if (result.isOk()) {
                 run();
             }
@@ -64,7 +77,7 @@ void clean() {
                     }
             });
     } catch (IOException e) {
-        System.err.println(STR."error: could not walk directory `target`");
+        System.err.println("error: could not walk directory `target`");
         System.err.println(e.getMessage());
     }
 }
@@ -99,24 +112,15 @@ void run() {
     try {
         System.out.println(STR."        Running `\{jarPath}`");
         var process = new ProcessBuilder("java", "--enable-preview", "-jar", jarPath.toString()).start();
-        // XXX: should try out the Project Loom stuff here
-        var stdout = new ProcessPrinter(process.inputReader(), System.out);
-        var stderr = new ProcessPrinter(process.errorReader(), System.err);
-        Thread outThread = new Thread(stdout);
-        Thread errThread = new Thread(stderr);
-        outThread.start();
-        errThread.start();
-        process.waitFor();
-        outThread.join();
-        errThread.join();
+        run(process);
     } catch (IOException e) {
         System.err.println(STR."error: could not find jar file at `\{jarPath}`");
     } catch (InterruptedException e) {
-        System.err.println(STR."error: process was interrupted");
+        System.err.println("error: process was interrupted");
     }
 }
 
-Result build() {
+Result build(Executable executable) {
     long start = System.currentTimeMillis();
     Result result = extractProject();
     Package aPackage = result.toPackage();
@@ -141,7 +145,7 @@ Result build() {
         return result;
     }
 
-    result = jar(aPackage, jars);
+    result = jar(aPackage, jars, executable);
     long end = System.currentTimeMillis();
     float duration = (float) (end - start) / 1000;
     if (result.isOk()) {
@@ -218,12 +222,42 @@ Result extractDependencies() {
 }
 
 Result fetch(Dependencies dependencies) {
+//    // XXX: need to programmatically set the Ivy Settings since trying to load resources fails during native execution
+//    var ivySettings = new IvySettings();
+//    ivySettings.setDefaultIvyUserDir(new File(STR."\{System.getProperty("user.home")}/.ivy2"));
+//    ivySettings.setDefaultCache(new File(STR."\{System.getProperty("user.home")}/.ivy2/cache"));
+//
+//    // Add a resolver for Maven Central
+//    IBiblioResolver resolver = new IBiblioResolver();
+//    resolver.setM2compatible(true);
+//    resolver.setName("central");
+//    resolver.setRoot("https://repo1.maven.org/maven2/");
+//    ivySettings.addResolver(resolver);
+//    ivySettings.setDefaultResolver(resolver.getName());
+//
+//    // Add a public resolver
+//    URLResolver publicResolver = new URLResolver();
+//    publicResolver.setName("public");
+//    publicResolver.addIvyPattern("http://repo1.maven.org/maven2/[organisation]/[module]/[revision]/[artifact]-[revision].[ext]");
+//    publicResolver.addArtifactPattern("http://repo1.maven.org/maven2/[organisation]/[module]/[revision]/[artifact]-[revision].[ext]");
+//    ivySettings.addResolver(publicResolver);
+//
+//    // Add a main resolver
+//    URLResolver mainResolver = new URLResolver();
+//    mainResolver.setName("main");
+//    mainResolver.addIvyPattern("http://repo1.maven.org/maven2/[organisation]/[module]/[revision]/[artifact]-[revision].[ext]");
+//    mainResolver.addArtifactPattern("http://repo1.maven.org/maven2/[organisation]/[module]/[revision]/[artifact]-[revision].[ext]");
+//    ivySettings.addResolver(mainResolver);
+//
+//    Ivy ivy = Ivy.newInstance(ivySettings);
+//    Message.setDefaultLogger(new QuietLogger());
+
     Ivy ivy = Ivy.newInstance();
     try {
         ivy.configureDefault();
         Message.setDefaultLogger(new QuietLogger());
     } catch (ParseException | IOException e) {
-        System.err.println(STR."error: could not configure Ivy");
+        System.err.println("error: could not configure Ivy");
         System.err.println(e.getMessage());
         return new Result(null);
     }
@@ -233,7 +267,7 @@ Result fetch(Dependencies dependencies) {
         return dirResult;
     }
 
-    List<Path> paths = new ArrayList<>();
+    var paths = new ArrayList<LibInfo>();
     for (var entry : dependencies.get().entrySet()) {
         try {
             ModuleId module = entry.getKey();
@@ -250,8 +284,11 @@ Result fetch(Dependencies dependencies) {
                 var target = Paths.get("target", "lib", source.getFileName().toString());
                 if (!target.toFile().exists()) {
                     Files.copy(source, target);
+                    paths.add(new LibInfo(target, true));
+                } else {
+                    paths.add(new LibInfo(target, false));
                 }
-                paths.add(target);
+
             }
         } catch (ParseException | IOException e) {
             System.err.println(STR."error: failed fetching dependency `\{entry}`");
@@ -265,24 +302,47 @@ Result fetch(Dependencies dependencies) {
 Result compile(Package aPackage, Jars jars) {
     var cwd = System.getProperty("user.dir");
     System.out.println(STR."    Compiling \{aPackage.name} v\{aPackage.semver()} (\{cwd})");
-    var compiler = ToolProvider.getSystemJavaCompiler();
 
-    try (var fileManager = compiler.getStandardFileManager(null, null, null)) {
-        var compilationUnits = fileManager.getJavaFileObjects(Paths.get("src", "Main.java"));
-        String classpath = String.join(":", jars.paths.stream().map(Path::toString).toList());
-        var options = Arrays.asList("--enable-preview", "--source", "22", "-cp", classpath, "-d", "target/classes");
-        var task = compiler.getTask(null, fileManager, null, options, null, compilationUnits);
-        task.call();
-    } catch (IOException e) {
-        var sourcePath = STR."\{cwd + File.separator}src";
-        System.err.println(STR."error: no source files detected at `\{sourcePath}`");
+    try {
+        var classpath = String.join(":", jars.libs.stream().map(lib -> lib.path.toString()).toList());
+        // Using Process API instead of ToolProvider.getSystemJavaCompiler() because aspire to build a native image
+        var process = new ProcessBuilder(
+                "javac",
+                "--enable-preview",
+                "--source", "22",
+                "-cp", classpath,
+                "-d", STR."target\{File.separator}classes",
+                Paths.get("src", "Main.java").toString()
+            ).start();
+        int exit = run(process);
+        if (exit != 0) {
+            System.err.println("error: failed to compile");
+            return new Result(null);
+        }
+    } catch (InterruptedException | IOException e) {
+        System.err.println("error: failed to compile");
+        System.err.println(e.getMessage());
         return new Result(null);
     }
-
     return new Result(new Ok());
 }
 
-Result jar(Package aPackage, Jars jars) {
+private int run(Process process) throws IOException, InterruptedException {
+    // XXX: should try out the Project Loom stuff here
+    var stdout = new ProcessPrinter(process.inputReader(), System.out);
+    var stderr = new ProcessPrinter(process.errorReader(), System.err);
+    Thread outThread = new Thread(stdout);
+    Thread errThread = new Thread(stderr);
+    outThread.start();
+    errThread.start();
+    process.waitFor();
+    outThread.join();
+    errThread.join();
+    return process.exitValue();
+}
+
+Result jar(Package aPackage, Jars dependencies, Executable executable) {
+    var needsFat = executable == Executable.FAT || executable == Executable.NATIVE;
     var manifest = new Manifest();
     var attributes = manifest.getMainAttributes();
     attributes.putValue("Manifest-Version", "1.0");
@@ -291,14 +351,21 @@ Result jar(Package aPackage, Jars jars) {
     attributes.putValue("Name", aPackage.name);
 
     var jarDir = Paths.get("target", "jar");
-    Result dirResult = createDir(jarDir);
-    if (!dirResult.isOk()) {
-        return dirResult;
+    var result = createDir(jarDir);
+    if (!result.isOk()) {
+        return result;
     }
 
-    var paths = jars.paths();
-    var relativized = paths.stream().map(jarDir::relativize).map(Path::toString).toList();
-    attributes.putValue("Class-Path", String.join(" ", relativized));
+    var libs = dependencies.libs();
+    if (needsFat) {
+        result = unpack(dependencies);
+        if (!result.isOk()) {
+            return result;
+        }
+    } else {
+        var relativized = libs.stream().map(lib -> jarDir.relativize(lib.path)).map(Path::toString).toList();
+        attributes.putValue("Class-Path", String.join(" ", relativized));
+    }
 
     var jarPath = jarDir.resolve(aPackage.getMainJarName());
     try (
@@ -306,12 +373,57 @@ Result jar(Package aPackage, Jars jars) {
             var jar = new JarOutputStream(fos, manifest)
     ) {
         var path = Paths.get("target", "classes");
-        return addEntriesToJar(path, jar);
+        return buildJar(path, jar);
     } catch (IOException e) {
         System.err.println(STR."error: failed creating jar file. \{e.getMessage()}");
         return new Result(null);
     }
 }
+
+private static Result unpack(Jars dependencies) {
+    var base = Paths.get("target", "classes");
+    for (var lib : dependencies.libs()) {
+        if (!lib.wasCopied) {
+            continue;
+        }
+        var dependency = lib.path;
+        try (var jar = new JarFile(dependency.toFile())) {
+            var entries = jar.entries();
+            while (entries.hasMoreElements()) {
+                var entry = entries.nextElement();
+                if (entry.getName().equals("META-INF/MANIFEST.MF") ||
+                        entry.getName().equals("module.properties")) {
+                    continue;
+                }
+
+                var nameToUse = entry.getName();
+                if (nameToUse.endsWith("LICENSE") || nameToUse.endsWith("NOTICE")) {
+                    nameToUse = STR."\{nameToUse}_\{dependency.getFileName()}";
+                }
+
+                var entryDest = base.resolve(nameToUse);
+                if (entry.isDirectory()) {
+                    Files.createDirectories(entryDest);
+                } else {
+                    Files.createDirectories(entryDest.getParent());
+                    try (InputStream input = jar.getInputStream(entry)) {
+                        Files.copy(input, entryDest);
+                    }
+                }
+            }
+        } catch (IOException e) {
+            System.err.println(STR."error: could not unpack jar file `\{dependency}`");
+            System.err.println(e.getMessage());
+            return new Result(null);
+        }
+
+    }
+    return new Result(new Ok());
+}
+
+//Result nativeImage(Package aPackage, Jars jars) {
+//
+//}
 
 private static Result createDir(Path targetDir) {
     try {
@@ -323,23 +435,25 @@ private static Result createDir(Path targetDir) {
     return new Result(new Ok());
 }
 
-Result addEntriesToJar(Path path, JarOutputStream jar) {
-    try (var paths = Files.walk(path)) {
+private Result buildJar(Path classesToJar, JarOutputStream jar) {
+    try (var paths = Files.walk(classesToJar)) {
             paths.filter(Files::isRegularFile)
                  .forEach(file -> {
-                    try {
-                        var entry = new JarEntry(path.relativize(file).toString());
-                        jar.putNextEntry(entry);
-                        jar.write(Files.readAllBytes(file));
-                        jar.closeEntry();
-                    } catch (IOException e) {
-                        System.err.println(STR."error: could not add entry `\{file}` to jar");
-                    }
-                });
+                     try {
+                         var entry = new JarEntry(classesToJar.relativize(file).toString());
+                         jar.putNextEntry(entry);
+                         jar.write(Files.readAllBytes(file));
+                         jar.closeEntry();
+                     } catch (IOException e) {
+                         System.err.println(STR."error: could not add entry `\{file}` to jar");
+                         System.err.println(e.getMessage());
+                     }
+                 });
     } catch (IOException e) {
-        System.err.println(STR."error: could not walk directory `\{path}`");
+        System.err.println(STR."error: could not walk directory `\{classesToJar}`");
         return new Result(null);
     }
+
     return new Result(new Ok());
 }
 
@@ -377,7 +491,7 @@ record Version(Integer major, Integer minor, Integer patch) {
 
     Version(String version)  {
         String[] semantic = version.split("\\.");
-        Integer major, minor, patch;
+        int major, minor, patch;
         major = minor = patch = 0;
         switch (semantic.length) {
             case 3:
@@ -405,7 +519,7 @@ record ModuleId(String organization, String name) {
 
 record Dependencies() {
 
-    private static Map<ModuleId, Version> dependencies = new HashMap<>();
+    private static final Map<ModuleId, Version> dependencies = new HashMap<>();
 
     void add(ModuleId modId, Version version) {
         dependencies.put(modId, version);
@@ -416,11 +530,19 @@ record Dependencies() {
     }
 }
 
-record Jars(List<Path> paths) {
+record Jars(List<LibInfo> libs) {
 
 }
 
-class ProcessPrinter implements Runnable {
+record LibInfo(Path path, boolean wasCopied) {
+
+}
+
+enum Executable {
+    JAR, FAT, NATIVE
+}
+
+static class ProcessPrinter implements Runnable {
 
     private final BufferedReader reader;
     private final PrintStream out;
@@ -444,7 +566,7 @@ class ProcessPrinter implements Runnable {
 }
 
 // Custom Logger for Ivy, maybe there's an easier way to configure this behavior?
-class QuietLogger extends AbstractMessageLogger {
+static class QuietLogger extends AbstractMessageLogger {
 
     @Override
     public void doProgress() {
