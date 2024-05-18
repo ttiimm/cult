@@ -1,6 +1,6 @@
 [package]
 name = "cult"
-version = "0.1.1"
+version = "0.2.0"
 
 [dependencies]
 org.apache.ivy_ivy = "2.5.2"
