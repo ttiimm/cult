@@ -19,7 +19,7 @@ jobs:
       run: java -cp lib/ivy-2.5.2.jar --enable-preview --source 22 src/Main.java build --fat
     - name: Get the version
       id: get_version
-      run: echo ::set-output name=VERSION::${GITHUB_REF#refs/tags/v}
+      run: echo ::set-output name=VERSION::${GITHUB_REF#refs/tags/v} | sed 's/-alpha//g'
     - uses: softprops/action-gh-release@v2
       with:
         draft: true
