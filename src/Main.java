@@ -1,22 +1,25 @@
+import org.cult.UnitTest;
+import org.cult.Tests;
+
 import java.io.*;
 import java.net.URI;
-import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
-import java.text.ParseException;
 import java.util.*;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
 
+import static org.cult.Lib.assertEquals;
+
 void main(String[] args) {
     if (args.length < 1) {
         usage();
         System.exit(1);
     }
+    Result result;
 
     switch (args[0]) {
         case "new":
@@ -45,8 +48,14 @@ void main(String[] args) {
             }
             build(executable);
             break;
+        case "test":
+            result = build(Executable.JAR);
+            if (result.isOk()) {
+                test();
+            }
+            break;
         case "run":
-            Result result = build(Executable.JAR);
+            result = build(Executable.JAR);
             if (result.isOk()) {
                 run();
             }
@@ -98,6 +107,10 @@ void newPackage(String path) {
         System.err.println(STR."error: could not create directory under `\{path}`");
         System.err.println(e.getMessage());
     }
+}
+
+void test() {
+    
 }
 
 void run() {
@@ -493,6 +506,7 @@ enum Executable {
     JAR, FAT, NATIVE
 }
 
+
 static class ProcessPrinter implements Runnable {
 
     private final BufferedReader reader;
@@ -514,4 +528,16 @@ static class ProcessPrinter implements Runnable {
             System.err.println("error: could not read process output");
         }
     }
+}
+
+
+@Tests
+static class CultTests {
+
+    @UnitTest
+    void testVersionOnlyMajor() {
+        var version = new Version("3");
+        assertEquals("3.0.0", version.semver());
+    }
+
 }
