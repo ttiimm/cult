@@ -2,6 +2,8 @@ import org.cult.UnitTest;
 import org.cult.Tests;
 
 import java.io.*;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -110,7 +112,41 @@ void newPackage(String path) {
 }
 
 void test() {
-    
+    try {
+        var mainClass = Class.forName("Main");
+        var testClasses = Arrays.stream(mainClass.getDeclaredClasses())
+                .filter(clazz -> clazz.getAnnotation(Tests.class) != null).toList();
+        for (var testClass : testClasses) {
+            var methods = testClass.getDeclaredMethods();
+            for (var method : methods) {
+                var unitTest = method.getAnnotation(UnitTest.class);
+                if (unitTest != null) {
+                    runTest(method);
+                }
+            }
+        }
+        System.out.println();
+    } catch (ClassNotFoundException e) {
+        System.err.println("error: could not find `Main` class");
+    } catch (ReflectiveOperationException e) {
+        System.err.println("error: could not run tests");
+    }
+}
+
+void runTest(Method method) throws ReflectiveOperationException {
+    try {
+        method.invoke(null);
+        System.out.print(".");
+    } catch (InvocationTargetException e) {
+        System.err.println("F");
+        Throwable cause = e.getCause();
+        if (cause instanceof AssertionError) {
+            System.err.println(STR."error: test \{method.getDeclaringClass()}#\{method.getName()} failed");
+            System.err.println(cause.getMessage());
+        } else {
+            throw new RuntimeException(cause);
+        }
+    }
 }
 
 void run() {
@@ -129,9 +165,9 @@ void run() {
 }
 
 Result build(Executable executable) {
-    long start = System.currentTimeMillis();
-    Result result = extractProject();
-    Package aPackage = result.toPackage();
+    var start = System.currentTimeMillis();
+    var result = extractProject();
+    var aPackage = result.toPackage();
     if (aPackage == null) {
         return result;
     }
@@ -148,20 +184,48 @@ Result build(Executable executable) {
         return result;
     }
 
-    result = compile(aPackage, jars);
+    result = findLibs();
+    var libs = result.toLibSources();
+    if (libs == null) {
+        return result;
+    }
+
+    var libBundle = new LibBundle(aPackage, jars, libs);
+    result = compile(libBundle);
+    if (!result.isOk()) {
+        return result;
+    }
+
+    var mainBundle = new MainBundle(aPackage, jars);
+    result = compile(mainBundle);
     if (!result.isOk()) {
         return result;
     }
 
     result = jar(aPackage, jars, executable);
-    long end = System.currentTimeMillis();
-    float duration = (float) (end - start) / 1000;
+    var end = System.currentTimeMillis();
+    var duration = (float) (end - start) / 1000;
     if (result.isOk()) {
         System.out.printf("    Finished build in %.2fs%n", duration);
     } else {
         System.out.printf("    Finished build with errors in %.2fs%n", duration);
     }
     return result;
+}
+
+Result findLibs() {
+    List<Path> libs;
+    try (var paths = Files.walk(Paths.get("src"))) {
+        libs = paths
+                .filter(Files::isRegularFile)
+                .filter(path -> path.toString().endsWith(".java"))
+                .filter(path -> !path.toString().endsWith("Main.java"))
+                .toList();
+    } catch (IOException e) {
+        System.err.println("error: could not walk directory `src/`");
+        return new Result(null);
+    }
+    return new Result(new LibSources(libs));
 }
 
 Result extractProject() {
@@ -263,21 +327,22 @@ Result fetch(Dependencies dependencies) {
     return new Result(new Jars(paths));
 }
 
-Result compile(Package aPackage, Jars jars) {
+Result compile(Bundle bundle) {
     var cwd = System.getProperty("user.dir");
-    System.out.println(STR."    Compiling \{aPackage.name} v\{aPackage.semver()} (\{cwd})");
+    System.out.println(STR."    Compiling \{bundle.getName()} v\{bundle.getVersion()} (\{cwd})");
 
     try {
-        var classpath = String.join(":", jars.libs.stream().map(lib -> lib.path.toString()).toList());
+        var sourcePaths = bundle.getSource().stream().map(Path::toString).toList();
         // Using Process API instead of ToolProvider.getSystemJavaCompiler() because aspire to build a native image
-        var process = new ProcessBuilder(
+        var javac = new ProcessBuilder(
                 "javac",
                 "--enable-preview",
                 "--source", "22",
-                "-cp", classpath,
-                "-d", STR."target\{File.separator}classes",
-                Paths.get("src", "Main.java").toString()
-            ).start();
+                "-cp", bundle.getClasspath(),
+                "-d", bundle.outLocation()
+        );
+        javac.command().addAll(sourcePaths);
+        var process = javac.start();
         int exit = run(process);
         if (exit != 0) {
             System.err.println("error: failed to compile");
@@ -310,7 +375,7 @@ Result jar(Package aPackage, Jars dependencies, Executable executable) {
     var manifest = new Manifest();
     var attributes = manifest.getMainAttributes();
     attributes.putValue("Manifest-Version", "1.0");
-    attributes.putValue("Created-By", "Cult 0.1.0");
+    attributes.putValue("Created-By", "Cult 0.3.0");
     attributes.putValue("Main-Class", "Main");
     attributes.putValue("Name", aPackage.name);
 
@@ -437,9 +502,96 @@ record Result(Record record) {
     public Jars toJars() {
         return (Jars) record;
     }
+
+    public LibSources toLibSources() {
+        return (LibSources) record;
+    }
 }
 
 record Ok() {}
+
+private interface Bundle {
+    String getClasspath();
+
+    List<Path> getSource();
+
+    String outLocation();
+
+    String getName();
+
+    String getVersion();
+}
+
+record MainBundle(Package aPackage, Jars jars) implements Bundle {
+
+    public MainBundle(Package aPackage, Jars jars) {
+        this.aPackage = aPackage;
+        this.jars = jars;
+    }
+
+    public String getClasspath() {
+        var dependencies = new ArrayList<>(jars.libs.stream().map(lib -> lib.path.toString()).toList());
+        // any libs
+        dependencies.add(Paths.get("target", "lib-classes").toString());
+        return String.join(":", dependencies);
+    }
+
+    public List<Path> getSource() {
+        return List.of(Paths.get("src", "Main.java"));
+    }
+
+    public String outLocation() {
+        return STR."target\{File.separator}classes";
+    }
+
+    @Override
+    public String getName() {
+        return aPackage.name;
+    }
+
+    @Override
+    public String getVersion() {
+        return aPackage.semver();
+    }
+
+}
+
+record LibBundle(Package aPackage, Jars jars, LibSources libs) implements Bundle {
+
+    public LibBundle(Package aPackage, Jars jars, LibSources libs) {
+        this.aPackage = aPackage;
+        this.jars = jars;
+        this.libs = libs;
+    }
+
+    @Override
+    public String getClasspath() {
+        var dependencies = new ArrayList<>(jars.libs.stream().map(lib -> lib.path.toString()).toList());
+        // XXX; make sure there is always "" otherwise will bork on empty list
+//        dependencies.add("\"\"");
+        return String.join(":", dependencies);
+    }
+
+    @Override
+    public List<Path> getSource() {
+        return libs.sources;
+    }
+
+    @Override
+    public String outLocation() {
+        return STR."target\{File.separator}lib-classes";
+    }
+
+    @Override
+    public String getName() {
+        return aPackage.name;
+    }
+
+    @Override
+    public String getVersion() {
+        return aPackage.semver();
+    }
+}
 
 record Package(String name, Version version) {
     String semver() {
@@ -502,6 +654,10 @@ record LibInfo(Path path, boolean wasCopied) {
 
 }
 
+record LibSources(List<Path> sources) {
+
+}
+
 enum Executable {
     JAR, FAT, NATIVE
 }
@@ -530,14 +686,13 @@ static class ProcessPrinter implements Runnable {
     }
 }
 
-
 @Tests
 static class CultTests {
 
     @UnitTest
-    void testVersionOnlyMajor() {
+    static void testVersionOnlyMajor() {
         var version = new Version("3");
-        assertEquals("3.0.0", version.semver());
+        assertEquals("3.00", version.semver());
     }
 
 }
