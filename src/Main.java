@@ -35,14 +35,14 @@ void main(String[] args) {
             clean();
             break;
         case "build":
-            var executable = Executable.JAR;
+            var executable = Artifact.JAR;
             if (args.length >= 2) {
                 // meh -- native stuff is turning out to be harder than expected
 //                if (args[1].equals("-n") || args[1].equals("--native")) {
 //                    executable = Executable.NATIVE;
 //                } else
                 if (args[1].equals("-f") || args[1].equals("--fat")) {
-                    executable = Executable.FAT;
+                    executable = Artifact.FAT;
                 } else {
                     System.err.println(STR."error: unknown build option `\{args[1]}`");
                     System.exit(1);
@@ -51,13 +51,13 @@ void main(String[] args) {
             build(executable);
             break;
         case "test":
-            result = build(Executable.JAR);
+            result = build(Artifact.JAR);
             if (result.isOk()) {
                 test();
             }
             break;
         case "run":
-            result = build(Executable.JAR);
+            result = build(Artifact.JAR);
             if (result.isOk()) {
                 run();
             }
@@ -164,7 +164,7 @@ void run() {
     }
 }
 
-Result build(Executable executable) {
+Result build(Artifact artifact) {
     var start = System.currentTimeMillis();
     var result = extractProject();
     var aPackage = result.toPackage();
@@ -202,7 +202,12 @@ Result build(Executable executable) {
         return result;
     }
 
-    result = jar(aPackage, jars, executable);
+    result = jarLib(aPackage);
+    if (!result.isOk()) {
+        return result;
+    }
+
+    result = jar(aPackage, jars, artifact);
     var end = System.currentTimeMillis();
     var duration = (float) (end - start) / 1000;
     if (result.isOk()) {
@@ -370,8 +375,26 @@ private int run(Process process) throws IOException, InterruptedException {
     return process.exitValue();
 }
 
-Result jar(Package aPackage, Jars dependencies, Executable executable) {
-    var needsFat = executable == Executable.FAT || executable == Executable.NATIVE;
+Result jarLib(Package aPackage) {
+    var manifest = new Manifest();
+    var attributes = manifest.getMainAttributes();
+    attributes.putValue("Manifest-Version", "1.0");
+    attributes.putValue("Created-By", "Cult 0.3.0");
+    attributes.putValue("Name", aPackage.name + "-lib");
+
+    var jarDir = Paths.get("target", "jar");
+    var result = createDir(jarDir);
+    if (!result.isOk()) {
+        return result;
+    }
+
+    var classDirectory = "lib-classes";
+    var jarName = aPackage.getLibJarName();
+    return doJarring(jarDir, jarName, manifest, classDirectory);
+}
+
+Result jar(Package aPackage, Jars dependencies, Artifact artifact) {
+    var needsFat = artifact == Artifact.FAT || artifact == Artifact.NATIVE;
     var manifest = new Manifest();
     var attributes = manifest.getMainAttributes();
     attributes.putValue("Manifest-Version", "1.0");
@@ -396,16 +419,11 @@ Result jar(Package aPackage, Jars dependencies, Executable executable) {
         attributes.putValue("Class-Path", String.join(" ", relativized));
     }
 
-    var jarPath = jarDir.resolve(aPackage.getMainJarName());
-    try (
-            var fos = new FileOutputStream(jarPath.toString());
-            var jar = new JarOutputStream(fos, manifest)
-    ) {
-        var path = Paths.get("target", "classes");
-        return buildJar(path, jar);
-    } catch (IOException e) {
-        System.err.println(STR."error: failed creating jar file. \{e.getMessage()}");
-        return new Result(null);
+    var jarName = aPackage.getMainJarName();
+    if (needsFat) {
+        return doJarring(jarDir, jarName, manifest, "classes", "lib-classes");
+    } else {
+        return doJarring(jarDir, jarName, manifest, "classes");
     }
 }
 
@@ -462,6 +480,27 @@ private static Result createDir(Path targetDir) {
         return new Result(null);
     }
     return new Result(new Ok());
+}
+
+private Result doJarring(Path jarDir, String jarName, Manifest manifest, String... classDirectory) {
+    var jarPath = jarDir.resolve(jarName);
+    try (
+            var fos = new FileOutputStream(jarPath.toString());
+            var jar = new JarOutputStream(fos, manifest)
+    ) {
+        Result result = new Result(null);
+        for (var classesPath : classDirectory) {
+            var path = Paths.get("target", classesPath);
+            result = buildJar(path, jar);
+            if (!result.isOk()) {
+                return result;
+            }
+        }
+        return result;
+    } catch (IOException e) {
+        System.err.println(STR."error: failed creating jar file. \{e.getMessage()}");
+        return new Result(null);
+    }
 }
 
 private Result buildJar(Path classesToJar, JarOutputStream jar) {
@@ -601,6 +640,10 @@ record Package(String name, Version version) {
     public String getMainJarName() {
         return STR."\{name}-\{semver()}.jar";
     }
+
+    public String getLibJarName() {
+        return STR."\{name}-lib-\{semver()}.jar";
+    }
 }
 
 record Version(Integer major, Integer minor, Integer patch) {
@@ -658,7 +701,7 @@ record LibSources(List<Path> sources) {
 
 }
 
-enum Executable {
+enum Artifact {
     JAR, FAT, NATIVE
 }
 
