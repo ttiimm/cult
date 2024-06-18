@@ -151,7 +151,7 @@ void runTest(Method method) throws ReflectiveOperationException {
 
 void run() {
     // XXX: assumes the build was run successfully and if that's the case, then know that a "package" exists
-    Package aPackage = extractProject().toPackage();
+    Package aPackage = extractProject(Paths.get(System.getProperty("user.dir"))).toPackage();
     var jarPath = Paths.get("target", "jar", aPackage.getMainJarName());
     try {
         System.out.println(STR."        Running `\{jarPath}`");
@@ -166,7 +166,7 @@ void run() {
 
 Result build(Artifact artifact) {
     var start = System.currentTimeMillis();
-    var result = extractProject();
+    var result = extractProject(Paths.get(System.getProperty("user.dir")));
     var aPackage = result.toPackage();
     if (aPackage == null) {
         return result;
@@ -202,9 +202,11 @@ Result build(Artifact artifact) {
         return result;
     }
 
-    result = jarLib(aPackage);
-    if (!result.isOk()) {
-        return result;
+    if (!libBundle.getSource().isEmpty()) {
+        result = jarLib(aPackage);
+        if (!result.isOk()) {
+            return result;
+        }
     }
 
     result = jar(aPackage, jars, artifact);
@@ -233,9 +235,9 @@ Result findLibs() {
     return new Result(new LibSources(libs));
 }
 
-Result extractProject() {
+static Result extractProject(Path root) {
     try {
-        Path toml = Paths.get("Cult.toml");
+        Path toml = root.resolve("Cult.toml");
         boolean inProject = false;
         String name = null;
         String version = null;
@@ -258,8 +260,7 @@ Result extractProject() {
             return new Result(new Package(name, packageVersion));
         }
     } catch (IOException e) {
-        String pwd = System.getProperty("user.dir");
-        System.err.println(STR."error: could not find `Cult.toml` in `\{pwd}`");
+        System.err.println(STR."error: could not find `Cult.toml` in `\{root}`");
         return new Result(null);
     }
     return new Result(null);
@@ -277,16 +278,29 @@ Result extractDependencies() {
                 inDependencies = false;
             }
 
-            if (inDependencies && line.split("=").length >= 2) {
-                var identifier = line.split("=")[0].replace("\"", "").trim();
+            String[] split = line.split("=");
+            if (inDependencies && split.length >= 2) {
+                var identifier = split[0].replace("\"", "").trim();
 
                 if (identifier.split("_").length != 2) {
                     System.err.println(STR."error: expecting single '_' in dependency key, but it was: \{identifier}");
                     return new Result(null);
                 }
 
-                var version = line.split("=")[1].replace("\"", "").trim();
-                dependencies.add(new ModuleId(identifier), new Version(version));
+                Dependency dependency;
+                if (split.length == 2) {
+                    var version = split[1].replace("\"", "").trim();
+                    dependency = new Version(version);
+                // XXX: going to need to start on parser soon
+                } else if (split.length == 3 && split[1].startsWith(" { path")) {
+                    var path = Paths.get(split[2].substring(2, split[2].length() - 3));
+                    dependency = new LocalDir(path);
+                } else {
+                    System.err.println(STR."error: invalid dependency: \{line}");
+                    return new Result(null);
+                }
+
+                dependencies.add(new ModuleId(identifier), dependency);
             }
         }
 
@@ -307,24 +321,18 @@ Result fetch(Dependencies dependencies) {
     }
 
     for (var entry : dependencies.get().entrySet()) {
-        // XXX: maybe move this stuff into ModuleId
         var module = entry.getKey();
-        var orgPath = String.join("/", module.organization.split("\\."));
-        var version = entry.getValue();
-        var semver = version.semver();
-        var jarName = STR."\{ module.name }-\{ semver }.jar";
-
-        var libJar = libDir.resolve(jarName);
-        if (libJar.toFile().exists()) {
-            paths.add(new LibInfo(libJar, false));
+        var dependency = entry.getValue();
+        var libJarPath = dependency.resolve(module);
+        if (libJarPath.isPresent() && libJarPath.get().toFile().exists()) {
+            paths.add(new LibInfo(libJarPath.get(), false));
+        } else if (libJarPath.isEmpty()) {
+            return new Result(null);
         } else {
-            String url = STR."https://repo1.maven.org/maven2/\{ orgPath }/\{ module.name }/\{ semver }/\{ jarName }";
-            try (InputStream in = URI.create(url).toURL().openStream()) {
-                Files.copy(in, libJar);
-                paths.add(new LibInfo(libJar, false));
-            } catch (IOException e) {
-                System.err.println(STR."error: could not fetch library: \{url}");
-                System.err.println(e.getMessage());
+            result = dependency.fetch(module, libJarPath.get());
+            if (result.isOk()) {
+                paths.add(new LibInfo(libJarPath.get(), false));
+            } else {
                 return new Result(null);
             }
         }
@@ -333,11 +341,16 @@ Result fetch(Dependencies dependencies) {
 }
 
 Result compile(Bundle bundle) {
+    if (bundle.getSource().isEmpty()) {
+        return new Result(new Ok());
+    }
+
     var cwd = System.getProperty("user.dir");
     System.out.println(STR."    Compiling \{bundle.getName()} v\{bundle.getVersion()} (\{cwd})");
 
     try {
         var sourcePaths = bundle.getSource().stream().map(Path::toString).toList();
+
         // Using Process API instead of ToolProvider.getSystemJavaCompiler() because aspire to build a native image
         var javac = new ProcessBuilder(
                 "javac",
@@ -518,7 +531,7 @@ private Result buildJar(Path classesToJar, JarOutputStream jar) {
                      }
                  });
     } catch (IOException e) {
-        System.err.println(STR."error: could not walk directory `\{classesToJar}`");
+        System.err.println(STR."error: could not build jar `\{classesToJar}`");
         return new Result(null);
     }
 
@@ -646,7 +659,14 @@ record Package(String name, Version version) {
     }
 }
 
-record Version(Integer major, Integer minor, Integer patch) {
+private interface Dependency {
+
+    Optional<Path> resolve(ModuleId module);
+
+    Result fetch(ModuleId module, Path libJarPath);
+}
+
+record Version(Integer major, Integer minor, Integer patch) implements Dependency {
 
     Version(String version)  {
         String[] semantic = version.split("\\.");
@@ -666,6 +686,51 @@ record Version(Integer major, Integer minor, Integer patch) {
     String semver() {
         return STR."\{major}.\{minor}.\{patch}";
     }
+
+    @Override
+    public Optional<Path> resolve(ModuleId module) {
+        // XXX: maybe move this stuff into ModuleId
+        var semver = semver();
+        var jarName = STR."\{ module.name }-\{ semver }.jar";
+        return Optional.of(Paths.get("target", "lib").resolve(jarName));
+    }
+
+    @Override
+    public Result fetch(ModuleId module, Path libJarPath) {
+        // XXX: maybe move this stuff into ModuleId
+        var orgPath = String.join("/", module.organization.split("\\."));
+        var semver = semver();
+        var jarName = libJarPath.getFileName();
+        String url = STR."https://repo1.maven.org/maven2/\{ orgPath }/\{ module.name }/\{ semver }/\{ jarName }";
+        try (InputStream in = URI.create(url).toURL().openStream()) {
+            Files.copy(in, libJarPath);
+            return new Result(new Ok());
+        } catch (IOException e) {
+            System.err.println(STR."error: could not fetch library: \{url}");
+            System.err.println(e.getMessage());
+            return new Result(null);
+        }
+    }
+}
+
+record LocalDir(Path pathToRoot) implements Dependency {
+    @Override
+    public Optional<Path> resolve(ModuleId module) {
+        Result result = extractProject(pathToRoot);
+        var thePackage = result.toPackage();
+        if (thePackage == null) {
+            System.err.println(STR."error: unable to resolve Cult.toml from \{pathToRoot}");
+            return Optional.empty();
+        }
+        var jarName = STR."\{thePackage.name()}-lib-\{thePackage.semver()}.jar";
+        return Optional.of(pathToRoot.resolve("target", "jar", jarName));
+    }
+
+    @Override
+    public Result fetch(ModuleId module, Path libJarPath) {
+        // XXX: handle this later by building the project at this root or something
+        throw new UnsupportedOperationException();
+    }
 }
 
 record ModuleId(String organization, String name) {
@@ -678,13 +743,13 @@ record ModuleId(String organization, String name) {
 
 record Dependencies() {
 
-    private static final Map<ModuleId, Version> dependencies = new HashMap<>();
+    private static final Map<ModuleId, Dependency> dependencies = new HashMap<>();
 
-    void add(ModuleId modId, Version version) {
-        dependencies.put(modId, version);
+    void add(ModuleId modId, Dependency dependency) {
+        dependencies.put(modId, dependency);
     }
 
-    public Map<ModuleId, Version> get() {
+    public Map<ModuleId, Dependency> get() {
         return new HashMap<>(dependencies);
     }
 }
