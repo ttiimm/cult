@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
+import java.util.function.Predicate;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.jar.JarOutputStream;
@@ -172,6 +173,9 @@ Result build(Artifact artifact) {
         return result;
     }
 
+    var cwd = System.getProperty("user.dir");
+    System.out.println(STR."    Compiling \{aPackage.name} v\{aPackage.semver()} (\{cwd})");
+
     result = extractDependencies();
     var dependencies = result.toDependencies();
     if (dependencies == null) {
@@ -196,7 +200,7 @@ Result build(Artifact artifact) {
         return result;
     }
 
-    var mainBundle = new MainBundle(aPackage, jars);
+    var mainBundle = new BinBundle(Paths.get("src", "Main.java"), aPackage, jars);
     result = compile(mainBundle);
     if (!result.isOk()) {
         return result;
@@ -221,18 +225,32 @@ Result build(Artifact artifact) {
 }
 
 Result findLibs() {
+    var srcBin = Paths.get("src", "bin");
+    var src = Paths.get("src");
+    return findSources("src",
+            List.of(// only include the files
+                    Files::isRegularFile,
+                    // exclude binaries
+                    path ->  !path.getParent().equals(srcBin) && !path.getParent().equals(src),
+                    // must be a Java source
+                    path -> path.toString().endsWith(".java")
+            )
+           );
+}
+
+private static Result findSources(String root, List<Predicate<? super Path>> filters) {
     List<Path> libs;
-    try (var paths = Files.walk(Paths.get("src"))) {
-        libs = paths
-                .filter(Files::isRegularFile)
-                .filter(path -> path.toString().endsWith(".java"))
-                .filter(path -> !path.toString().endsWith("Main.java"))
-                .toList();
+    try (var paths = Files.walk(Paths.get(root))) {
+        var filtered = paths;
+        for (var filter : filters) {
+            filtered = filtered.filter(filter);
+        }
+        libs = filtered.toList();
     } catch (IOException e) {
-        System.err.println("error: could not walk directory `src/`");
+        System.err.println(STR."error: could not walk directory `\{root}`");
         return new Result(null);
     }
-    return new Result(new LibSources(libs));
+    return new Result(new Sources(libs));
 }
 
 static Result extractProject(Path root) {
@@ -345,9 +363,6 @@ Result compile(Bundle bundle) {
         return new Result(new Ok());
     }
 
-    var cwd = System.getProperty("user.dir");
-    System.out.println(STR."    Compiling \{bundle.getName()} v\{bundle.getVersion()} (\{cwd})");
-
     try {
         var sourcePaths = bundle.getSource().stream().map(Path::toString).toList();
 
@@ -434,9 +449,9 @@ Result jar(Package aPackage, Jars dependencies, Artifact artifact) {
 
     var jarName = aPackage.getMainJarName();
     if (needsFat) {
-        return doJarring(jarDir, jarName, manifest, "classes", "lib-classes");
+        return doJarring(jarDir, jarName, manifest, STR."\{aPackage.name}-classes", "lib-classes");
     } else {
-        return doJarring(jarDir, jarName, manifest, "classes");
+        return doJarring(jarDir, jarName, manifest, STR."\{aPackage.name}-classes");
     }
 }
 
@@ -555,8 +570,8 @@ record Result(Record record) {
         return (Jars) record;
     }
 
-    public LibSources toLibSources() {
-        return (LibSources) record;
+    public Sources toLibSources() {
+        return (Sources) record;
     }
 }
 
@@ -574,9 +589,10 @@ private interface Bundle {
     String getVersion();
 }
 
-record MainBundle(Package aPackage, Jars jars) implements Bundle {
+record BinBundle(Path binary, Package aPackage, Jars jars) implements Bundle {
 
-    public MainBundle(Package aPackage, Jars jars) {
+    public BinBundle(Path binary, Package aPackage, Jars jars) {
+        this.binary = binary;
         this.aPackage = aPackage;
         this.jars = jars;
     }
@@ -589,11 +605,11 @@ record MainBundle(Package aPackage, Jars jars) implements Bundle {
     }
 
     public List<Path> getSource() {
-        return List.of(Paths.get("src", "Main.java"));
+        return List.of(binary);
     }
 
     public String outLocation() {
-        return STR."target\{File.separator}classes";
+        return Paths.get("target", STR."\{aPackage.name}-classes").toString();
     }
 
     @Override
@@ -608,9 +624,9 @@ record MainBundle(Package aPackage, Jars jars) implements Bundle {
 
 }
 
-record LibBundle(Package aPackage, Jars jars, LibSources libs) implements Bundle {
+record LibBundle(Package aPackage, Jars jars, Sources libs) implements Bundle {
 
-    public LibBundle(Package aPackage, Jars jars, LibSources libs) {
+    public LibBundle(Package aPackage, Jars jars, Sources libs) {
         this.aPackage = aPackage;
         this.jars = jars;
         this.libs = libs;
@@ -626,7 +642,7 @@ record LibBundle(Package aPackage, Jars jars, LibSources libs) implements Bundle
 
     @Override
     public List<Path> getSource() {
-        return libs.sources;
+        return libs.paths;
     }
 
     @Override
@@ -762,7 +778,7 @@ record LibInfo(Path path, boolean wasCopied) {
 
 }
 
-record LibSources(List<Path> sources) {
+record Sources(List<Path> paths) {
 
 }
 
