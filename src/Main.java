@@ -113,40 +113,24 @@ void newPackage(String path) {
 }
 
 void test() {
+    // copy pasta
+    Package aPackage = extractProject(Paths.get(System.getProperty("user.dir"))).toPackage();
+    var jarPath = Paths.get("target", "jar", aPackage.getMainJarName());
+    var testerJar = Paths.get("..", "..", "cult", "target", "jar", "Tester-0.3.0.jar");
     try {
-        var mainClass = Class.forName("Main");
-        var testClasses = Arrays.stream(mainClass.getDeclaredClasses())
-                .filter(clazz -> clazz.getAnnotation(Tests.class) != null).toList();
-        for (var testClass : testClasses) {
-            var methods = testClass.getDeclaredMethods();
-            for (var method : methods) {
-                var unitTest = method.getAnnotation(UnitTest.class);
-                if (unitTest != null) {
-                    runTest(method);
-                }
-            }
-        }
-        System.out.println();
-    } catch (ClassNotFoundException e) {
-        System.err.println("error: could not find `Main` class");
-    } catch (ReflectiveOperationException e) {
-        System.err.println("error: could not run tests");
-    }
-}
-
-void runTest(Method method) throws ReflectiveOperationException {
-    try {
-        method.invoke(null);
-        System.out.print(".");
-    } catch (InvocationTargetException e) {
-        System.err.println("F");
-        Throwable cause = e.getCause();
-        if (cause instanceof AssertionError) {
-            System.err.println(STR."error: test \{method.getDeclaringClass()}#\{method.getName()} failed");
-            System.err.println(cause.getMessage());
-        } else {
-            throw new RuntimeException(cause);
-        }
+        System.out.println("    running tests");
+        // XXX: remove this hardcoding
+        var process = new ProcessBuilder("java",
+                "--enable-preview",
+                "-jar", testerJar.toString(),
+                jarPath.toString()
+            ).start();
+        run(process);
+    // Copy pasta
+    } catch (IOException e) {
+        System.err.println(STR."error: could not find jar file at `\{testerJar}`");
+    } catch (InterruptedException e) {
+        System.err.println("error: process was interrupted");
     }
 }
 
@@ -200,12 +184,6 @@ Result build(Artifact artifact) {
         return result;
     }
 
-    var mainBundle = new BinBundle(Paths.get("src", "Main.java"), aPackage, jars);
-    result = compile(mainBundle);
-    if (!result.isOk()) {
-        return result;
-    }
-
     if (!libBundle.getSource().isEmpty()) {
         result = jarLib(aPackage);
         if (!result.isOk()) {
@@ -213,7 +191,33 @@ Result build(Artifact artifact) {
         }
     }
 
-    result = jar(aPackage, jars, artifact);
+    var mainBundle = new BinBundle(Paths.get("src", "Main.java"), aPackage, jars);
+    result = compile(mainBundle);
+    if (!result.isOk()) {
+        return result;
+    }
+
+    Path binDirPath = Paths.get("src", "bin");
+    var binDir = binDirPath.toFile();
+    String[] binaries = binDir.list();
+    if (binaries != null) {
+        for (var path : binaries) {
+            var binPath = binDirPath.resolve(path);
+            String binNameWithExtension = binPath.getFileName().toString();
+            var binName = binNameWithExtension.substring(0, binNameWithExtension.lastIndexOf('.'));
+            var binPackage = new Package(binName, aPackage.version);
+            var binBundle = new BinBundle(binPath, binPackage, jars);
+            result = compile(binBundle);
+            if (!result.isOk()) {
+                return result;
+            }
+
+            jar(binPackage, binName, jars, artifact);
+        }
+    }
+
+    result = jar(aPackage, "Main", jars, artifact);
+
     var end = System.currentTimeMillis();
     var duration = (float) (end - start) / 1000;
     if (result.isOk()) {
@@ -421,13 +425,13 @@ Result jarLib(Package aPackage) {
     return doJarring(jarDir, jarName, manifest, classDirectory);
 }
 
-Result jar(Package aPackage, Jars dependencies, Artifact artifact) {
+Result jar(Package aPackage, String mainClassName, Jars dependencies, Artifact artifact) {
     var needsFat = artifact == Artifact.FAT || artifact == Artifact.NATIVE;
     var manifest = new Manifest();
     var attributes = manifest.getMainAttributes();
     attributes.putValue("Manifest-Version", "1.0");
     attributes.putValue("Created-By", "Cult 0.3.0");
-    attributes.putValue("Main-Class", "Main");
+    attributes.putValue("Main-Class", mainClassName);
     attributes.putValue("Name", aPackage.name);
 
     var jarDir = Paths.get("target", "jar");
