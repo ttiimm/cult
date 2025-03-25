@@ -5,19 +5,24 @@ Cargo for the Java ecosystem: an easy to use alternative to Ant/Maven/Gradle/etc
 We blindly follow Cargo like any good [Cargo Cult](https://en.wikipedia.org/wiki/Cargo_cult_programming). 
 
 This project is somewhat tongue-in-cheek, but there is a lack of simple tooling within the Java ecosystem that perhaps 
-Cult could help supplement. The project has also been a good excuse to learn and try some of the new experimental features
-in Java 22 of which there appear to be some experimental features to make programming in Java less verbose and somewhat 
-easier to get started using. 
+Cult could help supplement. My biggest gripe with Ant/Maven/Gradle is that I tend not to spend enough time with the tools
+to learn them deeply and end up copying-pasting between my projects or examples online. I'd rather have a small tool that
+is easy to get started with, works for most simple projects, and includes some basic features like testing.
+
+Another objective is to re-implement parts of Cargo, so that I can learn that tool in a bit more depth.
+
+The project has also been a good excuse to learn and try some of the new experimental features in Java 22 of which there appear
+to be some experimental features to make programming in Java less verbose and somewhat easier to get started using. This kinda
+lines up with my objective to build an ergonomic build tool, so I'm going with it.
 
 # Getting Started
 
-The official build artifact of Cult is currently a Jar, so these commands are based off of using Java to run the jar. 
-Eventually there may be a native executable to clean up some of that kludge, but until then, please bear with the mess.
+Download the latest version from the releases page or build one of your own.
 
-To start a new Cult:
+To start a new Cult (project):
 
 ```bash
-$ java --enable-preview -jar cult-0.1.0.jar new hail-cult
+$ cult new hail-cult
     Creating `hail-cult` project
 $ tree hail-cult
 hail-cult
@@ -29,8 +34,7 @@ hail-cult
 ```
 
 A Cult project uses a standard directory layout and TOML configuration that contains everything needed to build, test, 
-and run the project. In the future the layout of the project will change to fit better with Java-like constructs, like 
-packages and modules, but for now it is using this simple convention.
+and run the project.
 
 The `Cult.toml` contains the project's metadata needed for the build. The package nomenclature might go away in a later version
 to avoid conflating with the concept of a Java package. In the future this is also where the project's dependencies will go.
@@ -55,11 +59,13 @@ void main() {
 You can compile the project using the `build` command, which results in a runnable jar.
 
 ```bash
-$ java --enable-preview -jar ../cult-0.1.0.jar build
+$ cd hail-cult
+$ cult build
     Compiling hail-cult v0.1.0 (/Users/tim/Projects/cult-tests/hail-cult)
 Note: src/Main.java uses preview features of Java SE 22.
 Note: Recompile with -Xlint:preview for details.
     Finished build in 0.21s
+# the --enable-preview is only required until the expirmental features are adopted
 $ java --enable-preview -jar target/jar/hail-cult-0.1.0.jar
 Hail, World!
 ```
@@ -67,7 +73,7 @@ Hail, World!
 Cult can even run the project for you.
 
 ```bash
-$ java --enable-preview -jar ../cult-0.1.0.jar run
+$ cult run
     Compiling hail-cult v0.1.0 (/Users/tim/Projects/cult-tests/hail-cult)
 Note: src/Main.java uses preview features of Java SE 22.
 Note: Recompile with -Xlint:preview for details.
@@ -79,12 +85,78 @@ Hail, World!
 You can clean up all artifacts created by Cult using `clean`.
 
 ```bash
-$ java --enable-preview -jar ../cult-0.1.0.jar clean
+$ cult clean
 $ ls target
 ls: target: No such file or directory
 ```
 
-That's the extent of the functionality for the `0.1` release. 
+# Testing with Cult
+
+One feature of Cargo I find really nice is that testing is baked in, so I wanted a way to easily allow folks to test their project
+right out of the gate. To test applications, it requires adding a dependency on Cult
+
+```toml
+[package]
+name = "project-with-tests"
+version = "0.1.0"
+
+[dependencies]
+org.cult_cult = { path = "../../cult" }
+```
+
+And then using the @Test and @UnitTest annotations within the code. Similar to Rust, I wanted a way to allow the tests to co-reside with
+the code under test in the same file. Here's a simple example
+
+```java
+import org.cult.UnitTest;
+import org.cult.Tests;
+
+import static org.cult.Lib.assertEquals;
+
+void main() {
+    System.out.println(add(1, 2));
+}
+
+static int add(int a, int b) {
+    return a + b;
+}
+
+@Tests
+static class TestCases {
+
+    @UnitTest
+    static void testAdd() {
+        var result = add(2, 4);
+        assertEquals(result, 5);
+    }
+}
+```
+
+When tested, this should lead to an error.
+
+```
+$ cult test
+    Compiling with-tests v0.1.0 (/Users/tim/Projects/cult-tests/with-tests)
+Note: src/Main.java uses preview features of Java SE 22.
+Note: Recompile with -Xlint:preview for details.
+    Finished build in 0.39s
+    running tests
+F
+error: test class Main$TestCases#testAdd failed
+Expected 6 but got 5
+```
+
+Once fixed
+
+```
+$ cult test
+    Compiling with-tests v0.1.0 (/Users/tim/Projects/cult-tests/with-tests)
+Note: src/Main.java uses preview features of Java SE 22.
+Note: Recompile with -Xlint:preview for details.
+    Finished build in 0.29s
+    running tests
+.
+```
 
 # Developing Cult
 
@@ -95,23 +167,48 @@ The only pre-requisite to install is a version JDK 22.
 Cult can be run using, which will build the jar.
 
 ```bash
-$ java --enable-preview --source 22 src/Main.java build
-    Compiling cult v0.1.0 (/Users/tim/Projects/cult)
+$ java --enable-preview --source 22 src/Main.java build --fat
+    Compiling cult vx.y.z (/Users/tim/Projects/cult)
+Note: src/org/cult/Lib.java uses preview features of Java SE 22.
+Note: Recompile with -Xlint:preview for details.
 Note: src/Main.java uses preview features of Java SE 22.
 Note: Recompile with -Xlint:preview for details.
-    Finished build in 0.11s
+Note: src/bin/Tester.java uses preview features of Java SE 22.
+Note: Recompile with -Xlint:preview for details.
+    Finished build in 1.18s
 ```
 
-Afterwards, use the jar to continue development.
+Afterwards, use the jar to continue development....
 
 ```bash
-$ cp target/jar/cult-0.1.0.jar .
+$ cp target/jar/cult-x.y.z.jar .
 
 # Add a new feature
 
-$ java --enable-preview -jar cult-0.1.0.jar build
+$ java --enable-preview -jar cult-x.y.z.jar build
 ...
 ```
+
+....or the jar can be used to build a native executable version. This will require a version of Graalvm to use the
+command `native-image`. 
+
+```
+$ native-image --enable-preview -jar target/jar/cult-0.3.0.jar
+========================================================================================================================
+GraalVM Native Image: Generating 'cult-0.3.0' (executable)...
+========================================================================================================================
+...
+------------------------------------------------------------------------------------------------------------------------
+Produced artifacts:
+ /Users/tim/Projects/cult/cult-0.3.0 (executable)
+========================================================================================================================
+
+$ ./cult-0.3.0 -h
+A simple Java package manager
+```
+
+The native application can be used to build other Cult projects. In order to test them, it requires the Cult library is added
+as a dependency.
 
 # References
 
