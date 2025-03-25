@@ -57,7 +57,7 @@ void main(String[] args) {
             break;
         case "run":
             // should this be a Fat jar?
-            result = build(Artifact.JAR);
+            result = build(Artifact.FAT);
             if (result.isOk()) {
                 run();
             }
