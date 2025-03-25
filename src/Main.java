@@ -56,6 +56,7 @@ void main(String[] args) {
             }
             break;
         case "run":
+            // should this be a Fat jar?
             result = build(Artifact.JAR);
             if (result.isOk()) {
                 run();
@@ -802,9 +803,10 @@ static class ProcessPrinter implements Runnable {
     @Override
     public void run() {
         try (reader) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                out.println(line);
+            int c;
+            while ((c = reader.read()) != -1) {
+                // XXX: need to handle this better for non-ascii
+                out.print((char) c);
             }
         } catch (IOException e) {
             System.err.println("error: could not read process output");
