@@ -396,13 +396,17 @@ private int run(Process process) throws IOException, InterruptedException {
     // XXX: should try out the Project Loom stuff here
     var stdout = new ProcessPrinter(process.inputReader(), System.out);
     var stderr = new ProcessPrinter(process.errorReader(), System.err);
+    var stdin = new ProcessWriter(process, System.in);
     Thread outThread = new Thread(stdout);
     Thread errThread = new Thread(stderr);
+    Thread inThread = new Thread(stdin);
     outThread.start();
     errThread.start();
+    inThread.start();
     process.waitFor();
     outThread.join();
     errThread.join();
+    inThread.join();
     return process.exitValue();
 }
 
@@ -812,6 +816,46 @@ static class ProcessPrinter implements Runnable {
             System.err.println("error: could not read process output");
         }
     }
+}
+
+static class ProcessWriter implements Runnable {
+
+    private final Process process;
+    private final BufferedWriter writer;
+    private final InputStream in;
+
+    ProcessWriter(Process process, InputStream in) {
+        this.process = process;
+        this.writer = process.outputWriter();
+        this.in = in;
+    }
+
+    @Override
+    public void run() {
+        try (writer) {
+            while(true) {
+                if (in.available() > 0) {
+                    int c = in.read();
+                    writer.write(c);
+                    writer.flush();
+                }
+                // Check if the process has exited
+                try {
+                    int exitValue = process.exitValue();
+                    System.out.println("Process exited with value: " + exitValue);
+                    break;
+                } catch (IllegalThreadStateException e) {
+                    // Process is still running
+                }
+
+                // Sleep for a short interval before checking again
+                Thread.sleep(100);
+            }
+        } catch (IOException | InterruptedException e) {
+            System.err.println("error: could not write process input");
+        }
+    }
+
 }
 
 @Tests
