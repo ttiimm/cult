@@ -21,7 +21,6 @@ void main(String[] args) {
         System.exit(1);
     }
     Result result;
-
     switch (args[0]) {
         case "new":
             if (args.length < 2) {
@@ -56,10 +55,13 @@ void main(String[] args) {
             }
             break;
         case "run":
-            // should this be a Fat jar?
+            List<String> runArgs = Collections.emptyList();
+            if (args.length >= 2 && args[1].equals("--")) {
+                runArgs = List.of(Arrays.copyOfRange(args, 2, args.length));
+            }
             result = build(Artifact.FAT);
             if (result.isOk()) {
-                run();
+                run(runArgs);
             }
             break;
         default:
@@ -133,13 +135,17 @@ void test() {
     }
 }
 
-void run() {
+void run(List<String> argsToPass) {
     // XXX: assumes the build was run successfully and if that's the case, then know that a "package" exists
     Package aPackage = extractProject(Paths.get(System.getProperty("user.dir"))).toPackage();
     var jarPath = Paths.get("target", "jar", aPackage.getMainJarName());
     try {
         System.out.println(STR."        Running `\{jarPath}`");
-        var process = new ProcessBuilder("java", "--enable-preview", "-jar", jarPath.toString()).start();
+        var args = new ArrayList<>(List.of("java", "--enable-preview", "-jar", jarPath.toString()));
+        if (!argsToPass.isEmpty()) {
+            args.addAll(argsToPass);
+        }
+        var process = new ProcessBuilder(args).start();
         run(process);
     } catch (IOException e) {
         System.err.println(STR."error: could not find jar file at `\{jarPath}`");
