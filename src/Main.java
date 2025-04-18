@@ -400,8 +400,8 @@ Result compile(Bundle bundle) {
 
 private int run(Process process) throws IOException, InterruptedException {
     // XXX: should try out the Project Loom stuff here
-    var stdout = new ProcessPrinter(process.inputReader(), System.out);
-    var stderr = new ProcessPrinter(process.errorReader(), System.err);
+    var stdout = new ProcessPrinter(process.inputReader(), System.out, false);
+    var stderr = new ProcessPrinter(process.errorReader(), System.err, true);
     var stdin = new ProcessWriter(process, System.in);
     Thread outThread = new Thread(stdout);
     Thread errThread = new Thread(stderr);
@@ -804,19 +804,27 @@ static class ProcessPrinter implements Runnable {
 
     private final BufferedReader reader;
     private final PrintStream out;
+    private final boolean hideNote;
 
-    ProcessPrinter(BufferedReader reader, PrintStream out) {
+    ProcessPrinter(BufferedReader reader, PrintStream out, boolean hideNote) {
         this.reader = reader;
         this.out = out;
+        this.hideNote = hideNote;
     }
 
     @Override
     public void run() {
         try (reader) {
-            int c;
-            while ((c = reader.read()) != -1) {
-                // XXX: need to handle this better for non-ascii
-                out.print((char) c);
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (hideNote && line.startsWith("Note:") && line.endsWith("uses preview features of Java SE 22.")) {
+                    // skip line
+                } else if (hideNote && "Note: Recompile with -Xlint:preview for details.".equals(line)) {
+                    // skip line
+                } else {
+                    out.print(line);
+                    out.print(System.lineSeparator());
+                }
             }
         } catch (IOException e) {
             System.err.println("error: could not read process output");
@@ -848,7 +856,9 @@ static class ProcessWriter implements Runnable {
                 // Check if the process has exited
                 try {
                     int exitValue = process.exitValue();
-                    System.out.println("Process exited with value: " + exitValue);
+                    if (exitValue != 0) {
+                        System.err.println(STR."error: process exited with value: \{exitValue}");
+                    }
                     break;
                 } catch (IllegalThreadStateException e) {
                     // Process is still running
