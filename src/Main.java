@@ -1,5 +1,5 @@
-import org.cult.UnitTest;
 import org.cult.Tests;
+import org.cult.UnitTest;
 
 import java.io.*;
 import java.net.URI;
@@ -35,11 +35,9 @@ void main(String[] args) {
         case "build":
             var executable = Artifact.JAR;
             if (args.length >= 2) {
-                // meh -- native stuff is turning out to be harder than expected
-//                if (args[1].equals("-n") || args[1].equals("--native")) {
-//                    executable = Executable.NATIVE;
-//                } else
-                if (args[1].equals("-f") || args[1].equals("--fat")) {
+                if (args[1].equals("-n") || args[1].equals("--native")) {
+                    executable = Artifact.NATIVE;
+                } else if (args[1].equals("-f") || args[1].equals("--fat")) {
                     executable = Artifact.FAT;
                 } else {
                     System.err.println(STR."error: unknown build option `\{args[1]}`");
@@ -223,6 +221,10 @@ Result build(Artifact artifact) {
 
     result = jar(aPackage, "Main", jars, artifact);
 
+    if (result.isOk() && artifact == Artifact.NATIVE) {
+        result = buildNativeImage(aPackage);
+    }
+
     var end = System.currentTimeMillis();
     var duration = (float) (end - start) / 1000;
     if (result.isOk()) {
@@ -231,6 +233,33 @@ Result build(Artifact artifact) {
         System.out.printf("    Finished build with errors in %.2fs%n", duration);
     }
     return result;
+}
+
+private Result buildNativeImage(Package aPackage) {
+    var pathToJar = Paths.get(
+            "target",
+            "jar",
+            aPackage.getMainJarName()
+    ).toString();
+    var nativeImage = new ProcessBuilder(
+            "native-image",
+            "--enable-preview",
+            "-jar",
+            pathToJar
+    );
+    try {
+        var exitCode = run(nativeImage.start());
+        if (exitCode != 0) {
+            System.err.println("error: could not build native-image");
+            System.err.println(STR."exit code: \{exitCode}");
+            return new Result(null);
+        }
+        return new Result(new Ok());
+    } catch (IOException|InterruptedException e) {
+        System.err.println("error: could not build native-image");
+        System.err.println(e.getMessage());
+        return new Result(null);
+    }
 }
 
 Result findLibs() {
