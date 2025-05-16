@@ -18,14 +18,14 @@ import static org.cult.Lib.assertEquals;
 void main(String[] args) {
     if (args.length < 1) {
         usage();
-        System.exit(1);
+        System.exit(64);
     }
     Result result;
     switch (args[0]) {
         case "new":
             if (args.length < 2) {
                 System.err.println("error: missing <PATH> argument");
-                System.exit(1);
+                System.exit(64);
             }
             newPackage(args[1]);
             break;
@@ -41,7 +41,7 @@ void main(String[] args) {
                     executable = Artifact.FAT;
                 } else {
                     System.err.println(STR."error: unknown build option `\{args[1]}`");
-                    System.exit(1);
+                    System.exit(64);
                 }
             }
             build(executable);
@@ -468,7 +468,7 @@ Result jar(Package aPackage, String mainClassName, Jars dependencies, Artifact a
     var manifest = new Manifest();
     var attributes = manifest.getMainAttributes();
     attributes.putValue("Manifest-Version", "1.0");
-    attributes.putValue("Created-By", "Cult 0.3.0");
+    attributes.putValue("Created-By", "Cult 0.3.1");
     attributes.putValue("Main-Class", mainClassName);
     attributes.putValue("Name", aPackage.name);
 
@@ -537,10 +537,6 @@ private static Result unpack(Jars dependencies) {
     }
     return new Result(new Ok());
 }
-
-//Result nativeImage(Package aPackage, Jars jars) {
-//
-//}
 
 private static Result createDir(Path targetDir) {
     try {
