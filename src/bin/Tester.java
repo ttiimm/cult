@@ -12,7 +12,7 @@ import java.util.Arrays;
 void main(String[] args) {
     if (args.length != 1) {
         System.err.println("usage: Tester <path-to-jar>");
-        System.exit(1);
+        System.exit(64);
     }
 
     var jarUnderTest = args[0];
