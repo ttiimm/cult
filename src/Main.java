@@ -134,7 +134,6 @@ void test() {
 }
 
 void run(List<String> argsToPass) {
-    // XXX: assumes the build was run successfully and if that's the case, then know that a "package" exists
     Package aPackage = extractProject(Paths.get(System.getProperty("user.dir"))).toPackage();
     var jarPath = Paths.get("target", "jar", aPackage.getMainJarName());
     try {
@@ -829,26 +828,21 @@ static class ProcessPrinter implements Runnable {
 
     private final BufferedReader reader;
     private final PrintStream out;
-    private final boolean hideNote;
+    private final boolean hide;
 
-    ProcessPrinter(BufferedReader reader, PrintStream out, boolean hideNote) {
+    ProcessPrinter(BufferedReader reader, PrintStream out, boolean hide) {
         this.reader = reader;
         this.out = out;
-        this.hideNote = hideNote;
+        this.hide = hide;
     }
 
     @Override
     public void run() {
         try (reader) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                if (hideNote && line.startsWith("Note:") && line.endsWith("uses preview features of Java SE 22.")) {
-                    // skip line
-                } else if (hideNote && "Note: Recompile with -Xlint:preview for details.".equals(line)) {
-                    // skip line
-                } else {
-                    out.print(line);
-                    out.print(System.lineSeparator());
+            int c;
+            while ((c = reader.read()) != -1) {
+                if (!hide) {
+                    out.print(Character.toChars(c));
                 }
             }
         } catch (IOException e) {
@@ -890,7 +884,7 @@ static class ProcessWriter implements Runnable {
                 }
 
                 // Sleep for a short interval before checking again
-                Thread.sleep(100);
+                Thread.sleep(10);
             }
         } catch (IOException | InterruptedException e) {
             System.err.println("error: could not write process input");
